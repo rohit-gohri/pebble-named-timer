@@ -4,7 +4,9 @@
  * DESCRIPTION :
  *      Entry point and main logic for Named Timers, based on the official
  *      Pebble Timer app with support for naming saved timers via voice
- *      dictation and Clay phone settings, plus PebbleOS touch navigation.
+ *      dictation, presets, phone settings sync, and PebbleOS touch navigation.
+ *
+ * ORIGINAL AUTHOR : Eric Phillips        START DATE :    07/10/15
  *
  */
 

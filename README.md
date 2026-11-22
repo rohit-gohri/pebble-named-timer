@@ -32,3 +32,10 @@ pebble install --cloudpebble
 # or on the same Wi-Fi network:
 pebble install --phone <phone-ip>
 ```
+
+## Credits & License
+
+This watchapp is derived from the official [Pebble Timer](https://github.com/coredevices/pebble-apps/tree/main/timer) app in `coredevices/pebble-apps` (originally authored by Eric Phillips at Pebble, with Emery/Gabbro and PebbleOS updates by Thomas Buchheit and Eric Migicovsky / Core Devices).
+
+- Full upstream git history and original source author headers are preserved.
+- The upstream `coredevices/pebble-apps` repository does not currently include an explicit `LICENSE` file; accordingly, no conflicting license is asserted over upstream files, which remain subject to their original authors' rights and any license published upstream by Core Devices.
