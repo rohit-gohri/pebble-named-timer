@@ -73,6 +73,8 @@ typedef void (*DetailWindowDelete)(CountdownTimer *countdown_timer, void *contex
 
 typedef void (*DetailWindowQuickDictate)(CountdownTimer *countdown_timer, void *context);
 
+typedef void (*DetailWindowRestart)(CountdownTimer *countdown_timer, void *context);
+
 /*
  * Structure:   DetailWindowCallbacks
  * ----------------------------------
@@ -83,6 +85,7 @@ typedef struct DetailWindowCallbacks {
   DetailWindowEdit edit_timer;
   DetailWindowQuickDictate quick_dictate;
   DetailWindowPlayPause playpause_timer;
+  DetailWindowRestart restart_timer;
   DetailWindowDelete delete_timer;
 } DetailWindowCallbacks;
 
@@ -183,6 +186,8 @@ bool detail_window_get_topmost_window(DetailWindow *detail_window);
 
 void detail_window_set_countdown_timer(DetailWindow *detail_window,
                                        CountdownTimer *countdown_timer);
+
+CountdownTimer *detail_window_get_countdown_timer(DetailWindow *detail_window);
 
 
 

@@ -2,7 +2,7 @@
  * FILENAME :        main.c
  *
  * DESCRIPTION :
- *      Entry point and main logic for Named Timer, based on the official
+ *      Entry point and main logic for Named Timers, based on the official
  *      Pebble Timer app with support for naming saved timers via voice
  *      dictation and Clay phone settings, plus PebbleOS touch navigation.
  *
@@ -12,6 +12,7 @@
 #include "countdown_timer.h"
 #include "menu_window.h"
 #include "detail_window.h"
+#include "name_window.h"
 #include "setting_window.h"
 #include "popup_window.h"
 #include "phone.h"
@@ -37,7 +38,7 @@
 typedef enum {
   PENDING_ACTION_NONE = 0,
   PENDING_ACTION_EDIT_TIME,
-  PENDING_ACTION_DICTATE_NAME,
+  PENDING_ACTION_EDIT_NAME,
 } PendingEditAction;
 
 
@@ -47,6 +48,7 @@ typedef enum {
 
 static MenuWindow *s_menu_window = NULL;
 static DetailWindow *s_detail_window = NULL;
+static NameWindow *s_name_window = NULL;
 static SettingWindow *s_setting_window = NULL;
 static PopupWindow *s_popup_window = NULL;
 static uint8_t s_countdown_timers_count = 0;
@@ -71,6 +73,15 @@ static void prv_save_state(void) {
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
   countdown_timer_list_save(s_countdown_timers, s_countdown_timers_count,
     COUNTDOWN_TIMER_PERSIST_KEY);
+}
+
+static void prv_push_state_to_phone(void) {
+  phone_send_state(s_countdown_timers, s_countdown_timers_count);
+}
+
+static void prv_save_and_sync(void) {
+  prv_save_state();
+  prv_push_state_to_phone();
 }
 
 static uint16_t prv_get_next_refresh_delay(void) {
@@ -147,7 +158,7 @@ static void prv_apply_timer_name(CountdownTimer *timer, const char *new_name) {
   }
   countdown_timer_set_name(timer, new_name);
   prv_promote_timer(timer);
-  prv_save_state();
+  prv_save_and_sync();
   menu_window_reload_data(s_menu_window);
   menu_window_refresh(s_menu_window);
   detail_window_deep_refresh(s_detail_window);
@@ -187,25 +198,51 @@ static void prv_start_dictation_for_timer(CountdownTimer *timer) {
   dictation_session_start(s_dictation_session);
 }
 
+static void prv_restart_timer(CountdownTimer *timer) {
+  if (timer == NULL) {
+    return;
+  }
+  if (countdown_timer_list_get_timer_index(s_countdown_timers, s_countdown_timers_count, timer) < 0) {
+    return;
+  }
+  // Reset back to saved duration while preserving running vs paused state
+  countdown_timer_update(timer, countdown_timer_get_duration(timer), false);
+  prv_promote_timer(timer);
+  prv_save_and_sync();
+  menu_window_reload_data(s_menu_window);
+  menu_window_refresh(s_menu_window);
+  detail_window_deep_refresh(s_detail_window);
+  if (s_app_timer != NULL) {
+    app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
+  }
+  vibes_short_pulse();
+  s_last_activity = countdown_timer_get_epoch_ms();
+}
+
+static void prv_name_window_clear_cb(CountdownTimer *timer, void *context) {
+  prv_apply_timer_name(timer, "");
+  name_window_pop(s_name_window, true);
+}
+
+static void prv_name_window_dictate_cb(CountdownTimer *timer, void *context) {
+  name_window_pop(s_name_window, false);
+  prv_start_dictation_for_timer(timer);
+}
+
+static void prv_name_window_preset_cb(CountdownTimer *timer, const char *preset_name,
+                                      void *context) {
+  prv_apply_timer_name(timer, preset_name);
+  name_window_pop(s_name_window, true);
+}
+
 static void prv_action_edit_time_cb(ActionMenu *action_menu, const ActionMenuItem *action,
                                     void *context) {
   s_pending_edit_action = PENDING_ACTION_EDIT_TIME;
 }
 
-static void prv_action_dictate_name_cb(ActionMenu *action_menu, const ActionMenuItem *action,
-                                       void *context) {
-  s_pending_edit_action = PENDING_ACTION_DICTATE_NAME;
-}
-
-static void prv_action_pick_preset_cb(ActionMenu *action_menu, const ActionMenuItem *action,
-                                      void *context) {
-  const char *preset_name = (const char*)action_menu_item_get_action_data(action);
-  prv_apply_timer_name(s_edit_target_timer, preset_name);
-}
-
-static void prv_action_clear_name_cb(ActionMenu *action_menu, const ActionMenuItem *action,
-                                     void *context) {
-  prv_apply_timer_name(s_edit_target_timer, "");
+static void prv_action_edit_name_cb(ActionMenu *action_menu, const ActionMenuItem *action,
+                                    void *context) {
+  s_pending_edit_action = PENDING_ACTION_EDIT_NAME;
 }
 
 static void prv_action_menu_did_close(ActionMenu *menu, const ActionMenuItem *performed_action,
@@ -227,8 +264,9 @@ static void prv_action_menu_did_close(ActionMenu *menu, const ActionMenuItem *pe
   if (pending == PENDING_ACTION_EDIT_TIME) {
     setting_window_set_timer(s_setting_window, target);
     setting_window_push(s_setting_window, true);
-  } else if (pending == PENDING_ACTION_DICTATE_NAME) {
-    prv_start_dictation_for_timer(target);
+  } else if (pending == PENDING_ACTION_EDIT_NAME) {
+    name_window_set_timer(s_name_window, target);
+    name_window_push(s_name_window, true);
   }
 }
 
@@ -240,28 +278,9 @@ static void prv_open_edit_action_menu(CountdownTimer *timer) {
   s_edit_target_timer = timer;
   s_pending_edit_action = PENDING_ACTION_NONE;
 
-  uint8_t preset_count = presets_get_active_count();
-  bool has_name = countdown_timer_has_name(timer);
-  uint16_t root_items = 2 + (preset_count > 0 ? 1 : 0) + (has_name ? 1 : 0);
-
-  s_root_level = action_menu_level_create(root_items);
+  s_root_level = action_menu_level_create(2);
   action_menu_level_add_action(s_root_level, "Edit Time", prv_action_edit_time_cb, NULL);
-  action_menu_level_add_action(s_root_level, "Dictate Name", prv_action_dictate_name_cb, NULL);
-
-  if (preset_count > 0) {
-    ActionMenuLevel *preset_level = action_menu_level_create(preset_count);
-    for (uint8_t i = 0; i < preset_count; i++) {
-      const char *name = presets_get_active_name(i);
-      if (name != NULL) {
-        action_menu_level_add_action(preset_level, name, prv_action_pick_preset_cb, (void*)name);
-      }
-    }
-    action_menu_level_add_child(s_root_level, preset_level, "Preset Name");
-  }
-
-  if (has_name) {
-    action_menu_level_add_action(s_root_level, "Clear Name", prv_action_clear_name_cb, NULL);
-  }
+  action_menu_level_add_action(s_root_level, "Edit Name", prv_action_edit_name_cb, NULL);
 
   ActionMenuConfig config = (ActionMenuConfig) {
     .root_level = s_root_level,
@@ -277,52 +296,135 @@ static void prv_open_edit_action_menu(CountdownTimer *timer) {
 
 
 /*******************************************************************************
- * CLAY / PHONE CALLBACKS
+ * PHONE SETTINGS & SYNC CALLBACKS
  */
 
 static void prv_phone_settings_updated_callback(void *context) {
-  APP_LOG(APP_LOG_LEVEL_INFO, "Updated preset names from Clay (%u active)",
+  APP_LOG(APP_LOG_LEVEL_INFO, "Updated preset names from phone (%u active)",
           (unsigned)presets_get_active_count());
+  name_window_reload_data(s_name_window);
   s_last_activity = countdown_timer_get_epoch_ms();
 }
 
-static void prv_phone_quick_add_timer_callback(const char *name, int64_t duration_ms,
-                                               bool start_immediately, void *context) {
-  if (duration_ms < TIMER_MIN_LENGTH) {
-    return;
+static void prv_phone_sync_requested_callback(void *context) {
+  prv_push_state_to_phone();
+}
+
+static void prv_phone_timers_updated_callback(const PhoneTimerSpec *specs, uint8_t count,
+                                              void *context) {
+  CountdownTimer *new_list[COUNTDOWN_TIMERS_MAX] = {0};
+  bool kept[COUNTDOWN_TIMERS_MAX] = {0};
+  uint8_t new_count = 0;
+
+  if (count > COUNTDOWN_TIMERS_MAX) {
+    count = COUNTDOWN_TIMERS_MAX;
   }
-  CountdownTimer *timer = countdown_timer_create(duration_ms, &s_countdown_timer_id_max);
-  if (timer == NULL) {
-    return;
+
+  for (uint8_t i = 0; i < count; i++) {
+    const PhoneTimerSpec *spec = &specs[i];
+    if (spec->duration_ms < TIMER_MIN_LENGTH) {
+      continue;
+    }
+
+    CountdownTimer *matched = NULL;
+    if (spec->id != 0) {
+      for (uint8_t j = 0; j < s_countdown_timers_count; j++) {
+        if (!kept[j] && countdown_timer_get_id(s_countdown_timers[j]) == spec->id) {
+          kept[j] = true;
+          matched = s_countdown_timers[j];
+          break;
+        }
+      }
+    }
+
+    if (matched != NULL) {
+      if (countdown_timer_get_duration(matched) != spec->duration_ms) {
+        countdown_timer_update(matched, spec->duration_ms, true);
+      }
+      if (strcmp(countdown_timer_get_name(matched), spec->name) != 0) {
+        countdown_timer_set_name(matched, spec->name);
+      }
+      new_list[new_count++] = matched;
+    } else {
+      CountdownTimer *created = countdown_timer_create(spec->duration_ms, &s_countdown_timer_id_max);
+      if (created == NULL) {
+        continue;
+      }
+      if (spec->name[0] != '\0') {
+        countdown_timer_set_name(created, spec->name);
+      }
+      if (spec->start_immediately) {
+        countdown_timer_start(created);
+      }
+      new_list[new_count++] = created;
+    }
   }
-  if (name && name[0] != '\0') {
-    countdown_timer_set_name(timer, name);
+
+  // Clean up any windows/pointers referencing timers that were removed on the phone
+  CountdownTimer *detail_timer = detail_window_get_countdown_timer(s_detail_window);
+  CountdownTimer *setting_timer = setting_window_get_timer(s_setting_window);
+  bool detail_deleted = false;
+  bool setting_deleted = false;
+
+  for (uint8_t j = 0; j < s_countdown_timers_count; j++) {
+    if (!kept[j]) {
+      CountdownTimer *removed = s_countdown_timers[j];
+      if (removed == detail_timer) {
+        detail_deleted = true;
+      }
+      if (removed == setting_timer) {
+        setting_deleted = true;
+      }
+      if (removed == s_edit_target_timer) {
+        s_edit_target_timer = NULL;
+      }
+      if (removed == s_dictation_target_timer) {
+        s_dictation_target_timer = NULL;
+      }
+      countdown_timer_destroy(removed);
+    }
   }
-  countdown_timer_list_add(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
-    &s_countdown_timers_count, timer);
-  if (start_immediately) {
-    countdown_timer_start(timer);
+
+  if (detail_deleted) {
+    name_window_pop(s_name_window, false);
+    if (setting_deleted) {
+      setting_window_pop(s_setting_window, false);
+      setting_window_set_timer(s_setting_window, NULL);
+    }
+    detail_window_pop(s_detail_window, false);
+    detail_window_set_countdown_timer(s_detail_window, NULL);
+    name_window_set_timer(s_name_window, NULL);
+  } else if (setting_deleted) {
+    setting_window_pop(s_setting_window, false);
+    setting_window_set_timer(s_setting_window, NULL);
   }
-  prv_promote_timer(timer);
+
+  memcpy(s_countdown_timers, new_list, sizeof(CountdownTimer*) * COUNTDOWN_TIMERS_MAX);
+  s_countdown_timers_count = new_count;
+
+  prv_sort_timers_by_recency();
   prv_save_state();
 
-  // If currently on the initial empty SettingWindow, pop it so the user sees their new timer
-  if (setting_window_get_topmost_window(s_setting_window)) {
+  // If on the initial empty SettingWindow and timers were added, reveal the list
+  if (s_countdown_timers_count > 0 &&
+      setting_window_get_topmost_window(s_setting_window) &&
+      setting_window_get_timer(s_setting_window) == NULL) {
     setting_window_pop(s_setting_window, false);
   }
+
   menu_window_reload_data(s_menu_window);
   menu_window_refresh(s_menu_window);
-  detail_window_set_countdown_timer(s_detail_window, timer);
-  if (!detail_window_get_topmost_window(s_detail_window)) {
-    detail_window_push(s_detail_window, true);
-  }
   detail_window_deep_refresh(s_detail_window);
+  name_window_reload_data(s_name_window);
 
-  vibes_short_pulse();
   if (s_app_timer != NULL) {
     app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
   }
+  vibes_short_pulse();
   s_last_activity = countdown_timer_get_epoch_ms();
+
+  // Send back canonical timer IDs (e.g. for newly created timers)
+  prv_push_state_to_phone();
 }
 
 
@@ -339,7 +441,7 @@ static void app_timer_callback(void *data) {
 
   if (countdown_timer != NULL) {
     prv_sort_timers_by_recency();
-    prv_save_state();
+    prv_save_and_sync();
     detail_window_deep_refresh(s_detail_window);
 
     if (countdown_timer_has_name(countdown_timer)) {
@@ -392,10 +494,15 @@ static void app_timer_callback(void *data) {
 }
 
 static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, void *context) {
+  if (countdown_timer_list_get_timer_index(s_countdown_timers, s_countdown_timers_count,
+                                           countdown_timer) < 0) {
+    popup_window_pop(s_popup_window, true);
+    return;
+  }
   countdown_timer_update(countdown_timer, COUNTDOWN_TIMER_SNOOZE_DELAY, false);
   countdown_timer_start(countdown_timer);
   prv_promote_timer(countdown_timer);
-  prv_save_state();
+  prv_save_and_sync();
   popup_window_pop(s_popup_window, true);
   if (!detail_window_get_topmost_window(s_detail_window)) {
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
@@ -440,7 +547,7 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
   }
 
   prv_promote_timer(countdown_timer);
-  prv_save_state();
+  prv_save_and_sync();
 
   if (s_app_timer != NULL) {
     app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
@@ -468,9 +575,13 @@ static void detail_window_playpause_timer_callback(CountdownTimer *countdown_tim
     countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
   }
   prv_promote_timer(countdown_timer);
-  prv_save_state();
+  prv_save_and_sync();
   detail_window_deep_refresh(s_detail_window);
   s_last_activity = countdown_timer_get_epoch_ms();
+}
+
+static void detail_window_restart_timer_callback(CountdownTimer *countdown_timer, void *context) {
+  prv_restart_timer(countdown_timer);
 }
 
 static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer, void *context) {
@@ -478,7 +589,7 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
     s_countdown_timers_count, countdown_timer);
   countdown_timer_destroy(countdown_timer);
   countdown_timer_list_remove(s_countdown_timers, &s_countdown_timers_count, timer_index);
-  prv_save_state();
+  prv_save_and_sync();
 
   menu_window_reload_data(s_menu_window);
   menu_window_reload_data(s_menu_window);
@@ -558,13 +669,6 @@ static void initialize(void) {
   // Load customizable preset names
   presets_load();
 
-  // Connect to phone for Clay settings
-  phone_connect((PhoneCallbacks) {
-    .settings_updated = prv_phone_settings_updated_callback,
-    .quick_add_timer = prv_phone_quick_add_timer_callback,
-    .context = NULL,
-  });
-
   // Load saved timers
   if (persist_exists(COUNTDOWN_TIMER_PERSIST_KEY)) {
     countdown_timer_list_load(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
@@ -572,6 +676,21 @@ static void initialize(void) {
   }
   if (persist_exists(COUNTDOWN_TIMER_ID_PERSIST_KEY)) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
+  }
+  // Ensure every loaded timer has a unique positive ID for two-way phone sync
+  for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
+    int32_t id = countdown_timer_get_id(s_countdown_timers[i]);
+    bool dup = (id <= 0);
+    for (uint8_t j = 0; !dup && j < i; j++) {
+      if (countdown_timer_get_id(s_countdown_timers[j]) == id) {
+        dup = true;
+      }
+    }
+    if (dup) {
+      countdown_timer_rand_id(s_countdown_timers[i], &s_countdown_timer_id_max);
+    } else if (id > s_countdown_timer_id_max) {
+      s_countdown_timer_id_max = id;
+    }
   }
 #ifdef TIMER_HAS_SPEAKER
   s_sound_enabled = persist_read_bool(SOUND_ENABLED_PERSIST_KEY);
@@ -597,10 +716,21 @@ static void initialize(void) {
     .edit_timer = detail_window_edit_timer_callback,
     .quick_dictate = detail_window_quick_dictate_callback,
     .playpause_timer = detail_window_playpause_timer_callback,
+    .restart_timer = detail_window_restart_timer_callback,
     .delete_timer = detail_window_delete_timer_callback,
   };
   s_detail_window = detail_window_create(detail_callbacks);
   detail_window_set_highlight_color(s_detail_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
+
+  // create name picker window
+  NameWindowCallbacks name_callbacks = {
+    .on_clear = prv_name_window_clear_cb,
+    .on_dictate = prv_name_window_dictate_cb,
+    .on_preset = prv_name_window_preset_cb,
+    .context = NULL,
+  };
+  s_name_window = name_window_create(name_callbacks);
+  name_window_set_highlight_color(s_name_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
 
   // create setting window
   SettingWindowCallbacks setting_callbacks = {
@@ -622,6 +752,15 @@ static void initialize(void) {
     setting_window_set_timer(s_setting_window, NULL);
     setting_window_push(s_setting_window, true);
   }
+
+  // Connect to phone for two-way timer & preset sync (after windows & timers are ready)
+  phone_connect((PhoneCallbacks) {
+    .settings_updated = prv_phone_settings_updated_callback,
+    .timers_updated = prv_phone_timers_updated_callback,
+    .sync_requested = prv_phone_sync_requested_callback,
+    .context = NULL,
+  });
+  prv_push_state_to_phone();
 
   // start the main update timer
   s_app_timer = app_timer_register(prv_get_next_refresh_delay(), app_timer_callback, NULL);
@@ -708,6 +847,7 @@ static void deinitialize(void) {
 
   popup_window_destroy(s_popup_window);
   setting_window_destroy(s_setting_window);
+  name_window_destroy(s_name_window);
   detail_window_destroy(s_detail_window);
   menu_window_destroy(s_menu_window);
   countdown_timer_list_destroy_all(s_countdown_timers, &s_countdown_timers_count);

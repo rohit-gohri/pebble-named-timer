@@ -1,4 +1,4 @@
-# Named Timer (Pebble Time 2 & Pebble Round 2)
+# Named Timers (Pebble Time 2 & Pebble Round 2)
 
 Native C Pebble SDK 4.44 watchapp based on `coredevices/pebble-apps/timer`, targeting `emery` (Pebble Time 2, 200x228) and `gabbro` (Pebble Round 2, 260x260).
 
@@ -24,6 +24,7 @@ Always pass `--vnc` to emulator commands in headless Linux/container environment
 - `src/countdown_timer.[ch]` — Timer model & persistence (including 24-byte `name` label).
 - `src/presets.[ch]` — 8 customizable preset timer names persisted in watch storage and synced from Clay.
 - `src/menu_window.[ch]` — Timer list with dynamic row heights and two-line named timer cells.
-- `src/detail_window.[ch]` — Countdown detail view with timer name header, water/radial fill, and ActionBar (UP = Edit ActionMenu, long-press UP = quick Dictate Name, SELECT = Play/Pause, DOWN = Delete).
+- `src/detail_window.[ch]` — Countdown detail view with timer name header, water/radial fill, and ActionBar (UP = Edit ActionMenu [Edit Time / Edit Name], long-press UP = quick Dictate Name, SELECT = Play/Pause, long-press SELECT = Reset Timer, DOWN = Delete).
+- `src/name_window.[ch]` — Edit Name picker (`MenuLayer`) with optional top clear/remove icon, mic icon for voice dictation, and preset list below.
 - `src/popup_window.[ch]` — Animated PDC alarm popup with timer name, speaker chime (emery), snooze/dismiss, and wrist-shake (`accel_tap_service`) dismiss.
-- `src/phone.[ch]` & `src/pkjs/` — Clay phone configuration for preset names and optional Quick-Add named timer.
+- `src/phone.[ch]` & `src/pkjs/` — Offline Pebble-styled phone settings webview (`settings_page.js`) and two-way watch↔phone AppMessage sync (`index.js`) for editing, adding, and deleting all saved timers plus 8 preset names.

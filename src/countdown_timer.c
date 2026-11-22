@@ -162,8 +162,6 @@ void countdown_timer_stop(CountdownTimer *countdown_timer, int32_t *current_id_m
     countdown_timer->start_ms -= countdown_timer_get_epoch_ms();
     countdown_timer->paused = true;
     countdown_timer->last_update = time(NULL);
-    // give a new ID for pins
-    countdown_timer_rand_id(countdown_timer, current_id_max);
   }
 }
 
@@ -507,10 +505,17 @@ int64_t countdown_timer_get_display_time(CountdownTimer *countdown_timer) {
  */
 
 void countdown_timer_rand_id(CountdownTimer *countdown_timer, int32_t *current_id_max) {
-  // set the id equal to the current epoch in seconds
-  // this guaranties that the same ID will never be given unless called twice in the same second,
-  // which cannot happen as the user cannot create two timers that quickly
-  countdown_timer->id = time(NULL);
+  int32_t candidate = (int32_t)time(NULL);
+  if (candidate <= 0) {
+    candidate = 1;
+  }
+  if (current_id_max != NULL) {
+    if (candidate <= *current_id_max) {
+      candidate = *current_id_max + 1;
+    }
+    *current_id_max = candidate;
+  }
+  countdown_timer->id = candidate;
 }
 
 

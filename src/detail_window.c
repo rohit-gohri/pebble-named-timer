@@ -150,6 +150,19 @@ static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
   return detail_window->callbacks.playpause_timer(detail_window->countdown_timer, context);
 }
 
+/*
+ * SELECT long click handler callback
+ *
+ * restarts the timer from its saved duration
+ */
+
+static void select_long_click_handler(ClickRecognizerRef recognizer, void *context) {
+  DetailWindow *detail_window = (DetailWindow*)context;
+  if (detail_window->callbacks.restart_timer) {
+    detail_window->callbacks.restart_timer(detail_window->countdown_timer, context);
+  }
+}
+
 
 
 /*
@@ -176,6 +189,7 @@ static void click_config_provider(void *context) {
   window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
   window_long_click_subscribe(BUTTON_ID_UP, 500, up_long_click_handler, NULL);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, select_long_click_handler, NULL);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
 }
 
@@ -390,6 +404,13 @@ bool detail_window_get_topmost_window(DetailWindow *detail_window) {
 void detail_window_set_countdown_timer(DetailWindow *detail_window,
                                        CountdownTimer *countdown_timer) {
   detail_window->countdown_timer = countdown_timer;
+}
+
+CountdownTimer *detail_window_get_countdown_timer(DetailWindow *detail_window) {
+  if (detail_window == NULL) {
+    return NULL;
+  }
+  return detail_window->countdown_timer;
 }
 
 

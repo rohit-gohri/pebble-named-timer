@@ -1,20 +1,19 @@
 {
-  "name": "named-timer",
+  "name": "named-timers",
   "version": "1.0.0",
-  "author": "Pebble / Named Timer",
+  "description": "Countdown timer for Pebble Time 2 and Pebble Round 2 with named timers, voice dictation, and phone settings sync.",
+  "author": "Boring Downloads",
   "private": true,
-  "dependencies": {
-    "@rebble/clay": "^1.1.0"
-  },
   "keywords": [
     "pebble-app"
   ],
   "pebble": {
-    "displayName": "Named Timer",
+    "displayName": "Named Timers",
     "uuid": "bdae1e1e-2828-4e9b-9e6d-071ee568ed8f",
     "sdkVersion": "3",
     "projectType": "native",
     "enableMultiJS": true,
+    "usesPermissions": [],
     "targetPlatforms": [
       "emery",
       "gabbro"
@@ -36,10 +35,9 @@
       "PRESET_5",
       "PRESET_6",
       "PRESET_7",
-      "QUICK_ADD_NAME",
-      "QUICK_ADD_MINUTES",
-      "QUICK_ADD_SECONDS",
-      "QUICK_ADD_START"
+      "TIMERS_DATA",
+      "SYNC_REQUEST",
+      "STATE_SYNC"
     ],
     "resources": {
       "media": [
