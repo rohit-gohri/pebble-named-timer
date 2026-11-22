@@ -1,7 +1,7 @@
 {
   "name": "named-timers",
   "version": "1.0.0",
-  "description": "Countdown timer for Pebble Time 2 and Pebble Round 2 with named timers, voice dictation, and phone settings sync.",
+  "description": "Based on the official open-source Pebble Timer app, adding named timers, voice dictation, customizable presets, and phone settings sync for Pebble Time 2 and Pebble Round 2.",
   "author": "Boring Downloads",
   "private": true,
   "keywords": [

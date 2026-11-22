@@ -1,6 +1,10 @@
 # Named Timers (Pebble Time 2 & Pebble Round 2)
 
-A countdown timer watchapp for Pebble Time 2 (`emery`) and Pebble Round 2 (`gabbro`), based on the official open-source [Pebble Timer](https://github.com/coredevices/pebble-apps/tree/main/timer) app, with support for **naming your saved timers** (e.g., *Coffee*, *Laundry*, *Tea*, *Cooking*, *Workout*).
+A countdown timer watchapp for Pebble Time 2 (`emery`) and Pebble Round 2 (`gabbro`) with support for **naming your saved timers** (e.g., *Coffee*, *Laundry*, *Tea*, *Cooking*, *Workout*).
+
+> Based on the official open-source [Pebble Timer](https://github.com/coredevices/pebble-apps/tree/main/timer) watchapp by Pebble / Core Devices, with a fresh UUID so it installs cleanly alongside the official Timer app.
+
+**Pebble Appstore:** https://apps.repebble.com/2c61c0e6622c46f9b4945843
 
 ## Features
 
