@@ -415,3 +415,9 @@ CountdownTimer *countdown_timer_list_get_closest_timer_after(CountdownTimer **ti
                                                        CountdownTimer *after_countdown_timer);
 
 time_t countdown_timer_get_last_update(CountdownTimer *countdown_timer);
+
+#define COUNTDOWN_TIMER_NAME_MAX 24
+
+const char *countdown_timer_get_name(CountdownTimer *countdown_timer);
+bool countdown_timer_has_name(CountdownTimer *countdown_timer);
+void countdown_timer_set_name(CountdownTimer *countdown_timer, const char *name);

@@ -1,29 +1,30 @@
-# pebble-timer
-Simple pebble timer built to be published by Pebble in the store.
+# Named Timer (Pebble Time 2 & Pebble Round 2)
 
-![alt Timer Menu](https://github.com/pebble/pebble-timer/blob/release-1.0/assets/Menu.png)
-![alt Timer Setting](https://github.com/pebble/pebble-timer/blob/release-1.0/assets/Setting 1.png)
-![alt Timer Detail](https://github.com/pebble/pebble-timer/blob/release-1.0/assets/Bubbles.png)
-![alt Timer Pin](https://github.com/pebble/pebble-timer/blob/release-1.0/assets/Pin.png)
+A countdown timer watchapp for Pebble Time 2 (`emery`) and Pebble Round 2 (`gabbro`), based on the official open-source [Pebble Timer](https://github.com/coredevices/pebble-apps/tree/main/timer) app, with support for **naming your saved timers** (e.g., *Coffee*, *Laundry*, *Tea*, *Cooking*, *Workout*).
 
-Timers appear in a list on the main screen. Add a timer via the "+" icon at the top of the list similarly
-to the alarm app. When setting a timer, the time the timer will end is displayed under the entry fields if
-the timer duration is greater than 15 minutes. Also, the timer will send a pin to the timeline if the duration
-is greater than 15 minutes. A detailed view of the timer can be accessed by either selecting one of the 
-menu items on the main screen, or by choosing "Open timer" in the pin's action menu. In the detailed view,
-the timer can be played and paused as well as edited and deleted.
+## Features
 
-If the app is closed out, it will automatically open and vibrate when a timer goes off. From this timer ended
-screen, the user can dismiss the timer or snooze the timer. The former will leave it as a paused timer in
-the menu window, and the latter will roll the timer back one minute.
+- **Authentic Pebble Timer flow**: Add timers via `+` at the top of the list, set `HH:MM:SS`, view live countdown progress bars, MRU sorting (running timers on top), background Wakeups when the app is closed, speaker chime toggle on Pebble Time 2, and App Glance countdown.
+- **Name any saved timer**: From the Detail screen, press **UP (Edit)** to open the Edit ActionMenu:
+  - **Edit Time** — change the timer duration
+  - **Dictate Name** — speak a custom name using the Pebble Time 2 / Round 2 microphone (`DictationSession`); or **long-press UP** from the Detail screen as a quick shortcut
+  - **Preset Name** — pick from customizable preset names (*Coffee*, *Laundry*, *Tea*, *Cooking*, *Workout*, *Focus*, *Eggs*, *Nap* by default)
+  - **Clear Name** — revert to an unnamed timer
+- **Phone Settings (Clay)**: Customize up to 8 preset timer names from the Pebble mobile app settings page, and optionally push a new named timer straight to your watch.
+- **System Touch Navigation**: Opts into PebbleOS touch navigation (`app_touch_navigation_enable(true)`) alongside full physical button support.
+- **Hands-Free Alarm Dismiss**: When a timer expires, the alarm popup shows the timer's name (*e.g., "Coffee — Time's Up!"*), vibrates/chimes, and can be snoozed (+1 min), dismissed by button, or dismissed with a wrist shake (`accel_tap_service`).
 
-## Changelog
+## Build & Test
 
-### v1.2.1
-- Added Gabbro platform support
-- Improved UI scaling and font sizing across all screen sizes (Emery, Gabbro)
-- Improved setting window UI scaling with dynamic layout calculations
-- Fixed menu icon rendering artifact (black block/triangle) on round displays
-- Cleaned play icon anti-aliasing for crisp rendering on all platforms
+```bash
+pebble build
+pebble install --emulator emery --vnc
+pebble screenshot --no-open --scale 2 --emulator emery --vnc screenshot_emery.png
+```
 
-Thanks to [Thomas Buchheit](https://github.com/thomas5014) for contributing Emery/Gabbro support and UI scaling improvements.
+To install on a physical watch via the Pebble mobile app:
+```bash
+pebble install --cloudpebble
+# or on the same Wi-Fi network:
+pebble install --phone <phone-ip>
+```

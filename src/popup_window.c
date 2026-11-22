@@ -155,39 +155,35 @@ static void layers_center_in_window(PopupWindow *popup_window) {
 #else
   int16_t horiz_off = ACTION_BAR_WIDTH;
 #endif
-#ifndef PBL_PLATFORM_APLITE
-  // change layer size based on PDC size, to center PDC
-  GSize pdc_frame = gdraw_command_sequence_get_bounds_size(popup_window->draw_sequence);
   GRect window_frame = layer_get_frame(window_get_root_layer(popup_window->window));
+  int16_t content_w = window_frame.size.w - (popup_window->action_visible ? horiz_off : 0);
+  int16_t icon_bottom = window_frame.size.h / 2;
+
+#ifndef PBL_PLATFORM_APLITE
+  // change layer size based on PDC size, positioned slightly above center to leave room for 2-line title
+  GSize pdc_frame = gdraw_command_sequence_get_bounds_size(popup_window->draw_sequence);
   GRect layer_frame = GRect(0, 0, pdc_frame.w, pdc_frame.h);
-  if (popup_window->action_visible) {
-    layer_frame.origin.x = (window_frame.size.w - horiz_off) / 2 - pdc_frame.w / 2;
-  } else {
-    layer_frame.origin.x = window_frame.size.w / 2 - pdc_frame.w / 2;
-  }
-  layer_frame.origin.y = window_frame.size.h / 2 - pdc_frame.h / 2;
+  layer_frame.origin.x = (content_w - pdc_frame.w) / 2;
+  layer_frame.origin.y = (window_frame.size.h - pdc_frame.h) / 2 - PBL_IF_ROUND_ELSE(12, 20);
   layer_set_frame(popup_window->layer, layer_frame);
+  icon_bottom = layer_frame.origin.y + layer_frame.size.h;
 #else
   // change layer size based on image size, to center image
   GRect image_frame = gbitmap_get_bounds(popup_window->image);
-  GRect window_frame = layer_get_frame(window_get_root_layer(popup_window->window));
   GRect layer_frame = image_frame;
-  if (popup_window->action_visible) {
-    layer_frame.origin.x = (window_frame.size.w - horiz_off) / 2 - image_frame.size.w / 2;
-  } else {
-    layer_frame.origin.x = window_frame.size.w / 2 - image_frame.size.w / 2;
-  }
-  layer_frame.origin.y = window_frame.size.h / 2 - image_frame.size.h / 2 - 7;
+  layer_frame.origin.x = (content_w - image_frame.size.w) / 2;
+  layer_frame.origin.y = (window_frame.size.h - image_frame.size.h) / 2 - 18;
   layer_set_frame(popup_window->layer, layer_frame);
+  icon_bottom = layer_frame.origin.y + layer_frame.size.h;
 #endif
 
-  // center the text layer
-  GRect text_frame = layer_get_frame(text_layer_get_layer(popup_window->text));
-  text_frame.size.w = layer_get_bounds(window_get_root_layer(popup_window->window)).size.w -
-    ((popup_window->action_visible) ? horiz_off : 0);
+  // center the text layer cleanly below the PDC/image with room for "<Name>\nTime's Up!"
+  int16_t text_margin = PBL_IF_ROUND_ELSE(24, 6);
+  int16_t text_gap = PBL_IF_ROUND_ELSE(-4, 6);
+  GRect text_frame = GRect(text_margin, icon_bottom + text_gap, content_w - text_margin * 2, 54);
   layer_set_frame(text_layer_get_layer(popup_window->text), text_frame);
-  text_frame.origin.x = text_frame.origin.y = 0;
-  layer_set_bounds(text_layer_get_layer(popup_window->text), text_frame);
+  layer_set_bounds(text_layer_get_layer(popup_window->text),
+                   GRect(0, 0, text_frame.size.w, text_frame.size.h));
 }
 
 
@@ -247,6 +243,17 @@ static void prv_stop_alert(void) {
 #ifdef TIMER_HAS_SPEAKER
   speaker_stop();
 #endif
+}
+
+static PopupWindow *s_active_tap_popup = NULL;
+
+static void prv_accel_tap_handler(AccelAxisType axis, int32_t direction) {
+  if (s_active_tap_popup && s_active_tap_popup->callbacks.down_click) {
+    PopupWindow *pw = s_active_tap_popup;
+    s_active_tap_popup = NULL;
+    accel_tap_service_unsubscribe();
+    pw->callbacks.down_click(pw);
+  }
 }
 
 
@@ -327,14 +334,10 @@ static void prv_window_load(Window* window){
   layer_set_update_proc(popup_window->layer, layer_update_proc);
   layer_add_child(root, popup_window->layer);
   // text
-#ifndef PBL_PLATFORM_APLITE
-  const int text_layer_origin_y = 125;
-#else
-  const int text_layer_origin_y = 110;
-#endif
-  popup_window->text = text_layer_create(GRect(0, text_layer_origin_y, bounds.size.w, 36));
+  popup_window->text = text_layer_create(GRect(0, 125, bounds.size.w, 54));
   text_layer_set_font(popup_window->text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(popup_window->text, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(popup_window->text, GTextOverflowModeWordWrap);
   text_layer_set_background_color(popup_window->text, GColorClear);
   text_layer_set_text(popup_window->text, popup_window->title);
   layer_add_child(root, text_layer_get_layer(popup_window->text));
@@ -347,6 +350,8 @@ static void prv_window_load(Window* window){
 
   if (popup_window->action_visible) {
     action_bar_layer_add_to_window(popup_window->action, popup_window->window);
+    s_active_tap_popup = popup_window;
+    accel_tap_service_subscribe(prv_accel_tap_handler);
   }
 
   // re-center layers
@@ -357,6 +362,10 @@ static void prv_window_load(Window* window){
 
 static void prv_window_unload(Window* window){
   PopupWindow *popup_window = window_get_user_data(window);
+  if (s_active_tap_popup == popup_window) {
+    s_active_tap_popup = NULL;
+    accel_tap_service_unsubscribe();
+  }
   action_bar_layer_destroy(popup_window->action);
   text_layer_destroy(popup_window->text);
   layer_destroy(popup_window->layer);

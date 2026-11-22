@@ -88,14 +88,28 @@ static uint16_t menu_get_num_rows_callback(MenuLayer *menu_layer, uint16_t secti
 
 
 // Return height of each menu layer cell
-// Allows currently selected cell to be larger
-static int16_t menu_get_row_height_callback(MenuLayer *menu_layer, MenuIndex *cell_index, void
-*context) {
-  if (menu_layer_get_selected_index(menu_layer).row == cell_index->row) {
-    return MENU_LAYER_SELECTED_CELL_HEIGHT;
-  } else {
-    return MENU_LAYER_DEFAULT_CELL_HEIGHT;
+// Allows named timers and selected round cells to have extra breathing room
+static int16_t menu_get_row_height_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
+                                            void *context) {
+  MenuWindow *menu_window = (MenuWindow*)context;
+  uint8_t count = menu_window->callbacks.get_timer_count(context);
+  bool is_named = false;
+  if (cell_index->row > 0 && cell_index->row <= count) {
+    CountdownTimer *timer = menu_window->callbacks.get_timer(cell_index->row - 1, context);
+    is_named = countdown_timer_has_name(timer);
   }
+#ifdef PBL_ROUND
+  if (menu_layer_get_selected_index(menu_layer).row == cell_index->row) {
+    return is_named ? 74 : MENU_LAYER_SELECTED_CELL_HEIGHT;
+  } else {
+    return is_named ? 60 : MENU_LAYER_DEFAULT_CELL_HEIGHT;
+  }
+#else
+  if (cell_index->row == 0 || cell_index->row > count) {
+    return 48;
+  }
+  return is_named ? 64 : MENU_LAYER_DEFAULT_CELL_HEIGHT;
+#endif
 }
 
 // Draw a menu layer cell with optional text, image, and progress bar
@@ -155,6 +169,91 @@ static void menu_cell_draw(GContext *ctx, const Layer *layer, char *title, GBitm
   }
 }
 
+// Draw a named timer cell: timer label above countdown time, alongside play/pause icon
+static void menu_cell_draw_named(GContext *ctx, const Layer *layer, const char *name,
+                                 char *time_str, GBitmap *icon, int32_t progress,
+                                 GColor col_fore, GColor col_back) {
+  GRect lay_bounds = layer_get_bounds(layer);
+  GFont name_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont time_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GRect img_bounds = icon ? gbitmap_get_bounds(icon) : GRectZero;
+
+#ifdef PBL_ROUND
+  int16_t name_margin = 34;
+  GRect name_rect = GRect(name_margin, 3, lay_bounds.size.w - name_margin * 2, 22);
+  graphics_draw_text(ctx, name, name_font, name_rect, GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentCenter, NULL);
+
+  GSize time_size = graphics_text_layout_get_content_size(time_str, time_font, lay_bounds,
+    GTextOverflowModeFill, GTextAlignmentLeft);
+  int16_t total_w = img_bounds.size.w + time_size.w;
+  int16_t start_x = (lay_bounds.size.w - total_w) / 2;
+
+  if (icon) {
+    img_bounds.origin.x = start_x;
+    img_bounds.origin.y = 25;
+#ifdef PBL_COLOR
+    graphics_context_set_compositing_mode(ctx, GCompOpAnd);
+#else
+    if (menu_cell_layer_is_highlighted(layer)) {
+      graphics_context_set_compositing_mode(ctx, GCompOpAssignInverted);
+    }
+#endif
+    graphics_draw_bitmap_in_rect(ctx, icon, img_bounds);
+    graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+  }
+
+  GRect time_rect = GRect(start_x + img_bounds.size.w, 22, time_size.w + 4, 28);
+  graphics_draw_text(ctx, time_str, time_font, time_rect, GTextOverflowModeFill,
+                     GTextAlignmentLeft, NULL);
+
+  if (progress) {
+    int16_t prog_border = 42;
+    GRect prg_bounds = GRect(prog_border, lay_bounds.size.h - 11,
+                             lay_bounds.size.w - prog_border * 2, MENU_CELL_PROG_THICK);
+    graphics_context_set_fill_color(ctx, col_back);
+    graphics_fill_rect(ctx, prg_bounds, 1, GCornersAll);
+    prg_bounds.size.w = prg_bounds.size.w * progress / TRIG_MAX_ANGLE;
+    graphics_context_set_fill_color(ctx, col_fore);
+    graphics_fill_rect(ctx, prg_bounds, 1, GCornersAll);
+  }
+#else
+  if (icon) {
+    img_bounds.origin.x = 0;
+    img_bounds.origin.y = (lay_bounds.size.h - img_bounds.size.h - (progress ? 6 : 0)) / 2;
+#ifdef PBL_COLOR
+    graphics_context_set_compositing_mode(ctx, GCompOpAnd);
+#else
+    if (menu_cell_layer_is_highlighted(layer)) {
+      graphics_context_set_compositing_mode(ctx, GCompOpAssignInverted);
+    }
+#endif
+    graphics_draw_bitmap_in_rect(ctx, icon, img_bounds);
+    graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+  }
+
+  int16_t text_x = img_bounds.size.w;
+  int16_t text_w = lay_bounds.size.w - text_x - 8;
+  GRect name_rect = GRect(text_x, 4, text_w, 22);
+  graphics_draw_text(ctx, name, name_font, name_rect, GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentLeft, NULL);
+
+  GRect time_rect = GRect(text_x, 22, text_w, 28);
+  graphics_draw_text(ctx, time_str, time_font, time_rect, GTextOverflowModeFill,
+                     GTextAlignmentLeft, NULL);
+
+  if (progress) {
+    GRect prg_bounds = GRect(MENU_CELL_PROG_BORDER, lay_bounds.size.h - 8,
+                             lay_bounds.size.w - MENU_CELL_PROG_BORDER * 2, MENU_CELL_PROG_THICK);
+    graphics_context_set_fill_color(ctx, col_back);
+    graphics_fill_rect(ctx, prg_bounds, 1, GCornersAll);
+    prg_bounds.size.w = prg_bounds.size.w * progress / TRIG_MAX_ANGLE;
+    graphics_context_set_fill_color(ctx, col_fore);
+    graphics_fill_rect(ctx, prg_bounds, 1, GCornersAll);
+  }
+#endif
+}
+
 
 
 /*
@@ -197,8 +296,13 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
 #endif
 #endif
     }
-    menu_cell_draw(ctx, cell_layer, buff, icon, progress, font, MENU_CELL_CENTERED, progress_fg_color,
-      progress_bg_color);
+    if (countdown_timer_has_name(countdown_timer)) {
+      menu_cell_draw_named(ctx, cell_layer, countdown_timer_get_name(countdown_timer), buff,
+        icon, progress, progress_fg_color, progress_bg_color);
+    } else {
+      menu_cell_draw(ctx, cell_layer, buff, icon, progress, font, MENU_CELL_CENTERED,
+        progress_fg_color, progress_bg_color);
+    }
   }
 }
 
@@ -245,9 +349,7 @@ static MenuWindow *menu_window_init(MenuWindow *menu_window,
       .get_num_rows = menu_get_num_rows_callback,
       .draw_row = menu_draw_row_callback,
       .select_click = menu_select_callback,
-#ifdef PBL_ROUND
       .get_cell_height = menu_get_row_height_callback,
-#endif
     });
     menu_layer_set_click_config_onto_window(menu_window->menu, menu_window->window);
     layer_add_child(root, menu_layer_get_layer(menu_window->menu));

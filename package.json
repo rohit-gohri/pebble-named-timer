@@ -1,13 +1,46 @@
 {
-  "version": "1.2.7",
-  "author": "Pebble",
+  "name": "named-timer",
+  "version": "1.0.0",
+  "author": "Pebble / Named Timer",
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "@rebble/clay": "^1.1.0"
+  },
   "keywords": [
     "pebble-app"
   ],
   "pebble": {
+    "displayName": "Named Timer",
+    "uuid": "bdae1e1e-2828-4e9b-9e6d-071ee568ed8f",
     "sdkVersion": "3",
+    "projectType": "native",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "emery",
+      "gabbro"
+    ],
+    "watchapp": {
+      "onlyShownOnCommunication": false,
+      "hiddenApp": false,
+      "watchface": false
+    },
+    "capabilities": [
+      "configurable"
+    ],
+    "messageKeys": [
+      "PRESET_0",
+      "PRESET_1",
+      "PRESET_2",
+      "PRESET_3",
+      "PRESET_4",
+      "PRESET_5",
+      "PRESET_6",
+      "PRESET_7",
+      "QUICK_ADD_NAME",
+      "QUICK_ADD_MINUTES",
+      "QUICK_ADD_SECONDS",
+      "QUICK_ADD_START"
+    ],
     "resources": {
       "media": [
         {
@@ -89,45 +122,8 @@
           "type": "png-trans",
           "name": "IMAGE_PLAY_TRANS",
           "file": "images/image_play_bw.png"
-        },
-        {
-          "type": "bitmap",
-          "name": "IMAGE_ALARM",
-          "file": "images/image_alarm.png",
-          "targetPlatforms": ["aplite"]
-        },
-        {
-          "type": "bitmap",
-          "name": "IMAGE_SHREADER",
-          "file": "images/image_shreader.png",
-          "targetPlatforms": ["aplite"]
         }
       ]
-    },
-    "projectType": "native",
-    "uuid": "c64aae42-b822-4d6d-995b-bc7c38e843f4",
-    "messageKeys": {
-      "KEY_TOTAL_TIME": 15,
-      "KEY_UNIQUEID": 10,
-      "KEY_DURATION": 5
-    },
-    "enableMultiJS": true,
-    "displayName": "Timer",
-    "watchapp": {
-      "onlyShownOnCommunication": false,
-      "hiddenApp": false,
-      "watchface": false
-    },
-    "targetPlatforms": [
-      "aplite",
-      "basalt",
-      "chalk",
-      "diorite",
-      "emery",
-      "flint",
-      "gabbro"
-    ],
-    "capabilities": []
-  },
-  "name": "Timer"
+    }
+  }
 }

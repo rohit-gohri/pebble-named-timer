@@ -50,6 +50,7 @@
 struct DetailWindow {
   Window      *window;    //< main window
   Layer       *layer;     //< drawing layer
+  TextLayer   *name_text; //< optional timer label above countdown
   TextLayer   *main_text; //< main, larger text
   TextLayer   *sub_text;  //< footer, small text
   ActionBarLayer *action; //< action bar
@@ -123,6 +124,19 @@ static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
   return detail_window->callbacks.edit_timer(detail_window->countdown_timer, context);
 }
 
+/*
+ * UP long click handler callback
+ *
+ * quick voice dictation rename shortcut
+ */
+
+static void up_long_click_handler(ClickRecognizerRef recognizer, void *context) {
+  DetailWindow *detail_window = (DetailWindow*)context;
+  if (detail_window->callbacks.quick_dictate) {
+    detail_window->callbacks.quick_dictate(detail_window->countdown_timer, context);
+  }
+}
+
 
 
 /*
@@ -160,6 +174,7 @@ static void click_config_provider(void *context) {
   window_set_click_context(BUTTON_ID_SELECT, context);
   window_set_click_context(BUTTON_ID_DOWN, context);
   window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
+  window_long_click_subscribe(BUTTON_ID_UP, 500, up_long_click_handler, NULL);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
 }
@@ -207,13 +222,29 @@ static void prv_window_load(Window* window){
   (*layer_data) = detail_window;
   layer_set_update_proc(detail_window->layer, layer_update_proc);
   layer_add_child(root, detail_window->layer);
+  // create optional timer name label
+#ifdef PBL_ROUND
+  detail_window->name_text = text_layer_create(
+    GRect(16, 48, bounds.size.w - ACTION_BAR_WIDTH - 32, 30));
+  text_layer_set_text_alignment(detail_window->name_text, GTextAlignmentCenter);
+#else
+  detail_window->name_text = text_layer_create(
+    GRect(6, STATUS_BAR_LAYER_HEIGHT + 8, bounds.size.w - ACTION_BAR_WIDTH - 12, 30));
+  text_layer_set_text_alignment(detail_window->name_text, GTextAlignmentCenter);
+#endif
+  text_layer_set_font(detail_window->name_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_overflow_mode(detail_window->name_text, GTextOverflowModeTrailingEllipsis);
+  text_layer_set_text_color(detail_window->name_text, GColorBlack);
+  text_layer_set_background_color(detail_window->name_text, GColorClear);
+  text_layer_set_text(detail_window->name_text, "");
+  layer_add_child(root, text_layer_get_layer(detail_window->name_text));
   // create main text
 #ifdef PBL_ROUND
   detail_window->main_text = text_layer_create(
     GRect(0, bounds.size.h/2-text_sizes[0]/2, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[0]));
 #else
   detail_window->main_text = text_layer_create(
-    GRect(0, bounds.size.h*2 / 17, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[0]));
+    GRect(0, bounds.size.h / 2 - text_sizes[0] / 2 - 14, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[0]));
 #endif
   text_layer_set_font(detail_window->main_text, detail_window->large_font);
   text_layer_set_text(detail_window->main_text, "00:00");
@@ -223,7 +254,7 @@ static void prv_window_load(Window* window){
   // create sub text
 #ifdef PBL_ROUND
   detail_window->sub_text = text_layer_create(
-    GRect(0, bounds.size.h-text_sizes[2]-11, bounds.size.w, text_sizes[2]));
+    GRect(0, bounds.size.h-text_sizes[2]-16, bounds.size.w, text_sizes[2]));
     text_layer_set_text_alignment(detail_window->sub_text, GTextAlignmentCenter);
 #else
   detail_window->sub_text = text_layer_create(
@@ -261,6 +292,7 @@ static void prv_window_unload(Window* window){
   action_bar_layer_destroy(detail_window->action);
   text_layer_destroy(detail_window->sub_text);
   text_layer_destroy(detail_window->main_text);
+  text_layer_destroy(detail_window->name_text);
   layer_destroy(detail_window->layer);
   window_destroy(detail_window->window);
   gbitmap_destroy(detail_window->edit_icon);
@@ -367,11 +399,20 @@ void detail_window_set_countdown_timer(DetailWindow *detail_window,
  */
 
 void detail_window_refresh(DetailWindow *detail_window) {
-  if (detail_window->window == NULL) {
+  if (detail_window->window == NULL || detail_window->countdown_timer == NULL) {
     return;
   }
 
   layer_mark_dirty(detail_window->layer);
+  // optional timer name
+  if (countdown_timer_has_name(detail_window->countdown_timer)) {
+    text_layer_set_text(detail_window->name_text,
+                        countdown_timer_get_name(detail_window->countdown_timer));
+    layer_set_hidden(text_layer_get_layer(detail_window->name_text), false);
+  } else {
+    text_layer_set_text(detail_window->name_text, "");
+    layer_set_hidden(text_layer_get_layer(detail_window->name_text), true);
+  }
   // main text
   countdown_timer_format_text(
     prv_round_up_to_next_second(countdown_timer_get_display_time(detail_window->countdown_timer)),

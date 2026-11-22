@@ -77,6 +77,7 @@ struct CountdownTimer {
   int64_t     duration_ms;  //< total duration in milliseconds
   int32_t     id;           //< random unique integer for timeline pins
   char        buff[16];     //< buffer for printing time string into
+  char        name[COUNTDOWN_TIMER_NAME_MAX]; //< optional user-defined label
   bool        paused;       //< current state
   time_t      last_update;
 } __attribute__((__packed__));
@@ -420,6 +421,7 @@ void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array
       return;
     }
     persist_read_data(key, timer, sizeof(CountdownTimer));
+    timer->name[COUNTDOWN_TIMER_NAME_MAX - 1] = '\0';
     // Reject blobs whose contents are nonsensical even though the size matched
     // (e.g. same-sized foreign data). A zero/negative duration would later
     // divide by zero when drawing the menu progress bar, and the expired
@@ -575,3 +577,40 @@ char *countdown_timer_format_own_buff(CountdownTimer *countdown_timer) {
 time_t countdown_timer_get_last_update(CountdownTimer *countdown_timer) {
   return countdown_timer->last_update;
 }
+
+const char *countdown_timer_get_name(CountdownTimer *countdown_timer) {
+  if (countdown_timer == NULL) {
+    return "";
+  }
+  return countdown_timer->name;
+}
+
+bool countdown_timer_has_name(CountdownTimer *countdown_timer) {
+  return countdown_timer != NULL && countdown_timer->name[0] != '\0';
+}
+
+void countdown_timer_set_name(CountdownTimer *countdown_timer, const char *name) {
+  if (countdown_timer == NULL) {
+    return;
+  }
+  countdown_timer->name[0] = '\0';
+  if (name != NULL) {
+    while (*name == ' ' || *name == '\t' || *name == '\r' || *name == '\n') {
+      name++;
+    }
+    size_t len = strlen(name);
+    while (len > 0 && (name[len - 1] == ' ' || name[len - 1] == '\t' ||
+                       name[len - 1] == '\r' || name[len - 1] == '\n')) {
+      len--;
+    }
+    if (len >= COUNTDOWN_TIMER_NAME_MAX) {
+      len = COUNTDOWN_TIMER_NAME_MAX - 1;
+    }
+    if (len > 0) {
+      memcpy(countdown_timer->name, name, len);
+    }
+    countdown_timer->name[len] = '\0';
+  }
+  countdown_timer->last_update = time(NULL);
+}
+
