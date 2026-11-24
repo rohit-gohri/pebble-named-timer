@@ -6,11 +6,17 @@ var settingsPage = require('./settings_page');
 var STORAGE_KEY = 'named-timer-state-v1';
 var MAX_TIMERS = 8;
 var MAX_NAME_LEN = 23;
+var DEFAULT_SNOOZE_SEC = 60;
 var DEFAULT_PRESETS = ['Coffee', 'Laundry', 'Tea', 'Cooking', 'Workout', 'Focus', 'Eggs', 'Nap'];
 
 var configWaitTimer = null;
 var awaitingConfigSync = false;
 var pushInFlight = false;
+
+function defaultSnoozeForDuration(durationSec) {
+  var half = Math.floor((durationSec || 0) / 2);
+  return Math.max(5, Math.min(DEFAULT_SNOOZE_SEC, half));
+}
 
 function sanitizeName(name) {
   return String(name || '').replace(/[|\r\n]/g, ' ').trim().slice(0, MAX_NAME_LEN);
@@ -104,13 +110,28 @@ function parseTimersData(str) {
     var id = parseInt(line.slice(0, p1), 10);
     var durationSec = parseInt(line.slice(p1 + 1, p2), 10);
     var flags = parseInt(line.slice(p2 + 1, p3), 10);
-    var name = line.slice(p3 + 1);
+    var p4 = line.indexOf('|', p3 + 1);
+    var snoozeSec = 0;
+    var name;
+    if (p4 >= 0) {
+      var parsedSnooze = parseInt(line.slice(p3 + 1, p4), 10);
+      if (!isNaN(parsedSnooze) && parsedSnooze >= 5) {
+        snoozeSec = parsedSnooze;
+      }
+      name = line.slice(p4 + 1);
+    } else {
+      name = line.slice(p3 + 1);
+    }
     if (isNaN(id) || isNaN(durationSec) || durationSec < 5) {
       continue;
+    }
+    if (snoozeSec < 5) {
+      snoozeSec = defaultSnoozeForDuration(durationSec);
     }
     result.push({
       id: id,
       durationSec: durationSec,
+      snoozeSec: snoozeSec,
       running: (flags & 1) !== 0,
       name: sanitizeName(name)
     });
@@ -124,9 +145,10 @@ function serializeTimersData(timers) {
     var t = timers[i];
     var id = typeof t.id === 'number' && !isNaN(t.id) ? Math.floor(t.id) : 0;
     var dur = Math.min(359999, Math.max(5, Math.floor(t.durationSec || 0)));
+    var snooze = Math.min(359999, Math.max(5, Math.floor(t.snoozeSec || defaultSnoozeForDuration(dur))));
     var flags = (id === 0 && t.startImmediately) ? 1 : 0;
     var name = sanitizeName(t.name);
-    lines.push(id + '|' + dur + '|' + flags + '|' + name);
+    lines.push(id + '|' + dur + '|' + flags + '|' + snooze + '|' + name);
   }
   return lines.join('\n');
 }
@@ -262,10 +284,12 @@ Pebble.addEventListener('webviewclosed', function(e) {
   var state = loadState();
   if (Array.isArray(parsed.timers)) {
     state.timers = parsed.timers.slice(0, MAX_TIMERS).map(function(t) {
+      var durSec = Math.min(359999, Math.max(5, Math.floor(t.durationSec || 5)));
       return {
         id: typeof t.id === 'number' ? Math.floor(t.id) : 0,
         name: sanitizeName(t.name),
-        durationSec: Math.min(359999, Math.max(5, Math.floor(t.durationSec || 5))),
+        durationSec: durSec,
+        snoozeSec: Math.min(359999, Math.max(5, Math.floor(t.snoozeSec || defaultSnoozeForDuration(durSec)))),
         running: false,
         startImmediately: !!t.startImmediately
       };

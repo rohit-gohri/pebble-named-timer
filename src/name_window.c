@@ -12,11 +12,13 @@
 #include <pebble.h>
 #include "name_window.h"
 #include "presets.h"
+#include "wrap_menu.h"
 
 struct NameWindow {
   Window *window;
   MenuLayer *menu;
   StatusBarLayer *status;
+  WrapMenuConfig wrap_menu;
   GColor highlight_color;
   NameWindowCallbacks callbacks;
   CountdownTimer *timer;
@@ -37,6 +39,11 @@ static uint16_t prv_get_num_rows(MenuLayer *menu_layer, uint16_t section_index, 
     count += 1;
   }
   return count;
+}
+
+static uint16_t prv_name_get_row_count(void *context) {
+  NameWindow *nw = (NameWindow *)context;
+  return prv_get_num_rows(nw->menu, 0, nw);
 }
 
 static int16_t prv_get_cell_height(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
@@ -170,7 +177,7 @@ static void prv_window_load(Window *window) {
   });
   menu_layer_set_highlight_colors(nw->menu, nw->highlight_color,
                                   gcolor_legible_over(nw->highlight_color));
-  menu_layer_set_click_config_onto_window(nw->menu, window);
+  wrap_menu_attach(&nw->wrap_menu, nw->menu, window, prv_name_get_row_count, nw);
   layer_add_child(root, menu_layer_get_layer(nw->menu));
 
   // Default highlight on the mic row when a clear row sits above it so a quick tap

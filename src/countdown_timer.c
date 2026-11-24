@@ -69,6 +69,31 @@
 
 
 /*
+ * v1 and v2 structure layouts for seamless persistence migration
+ */
+
+typedef struct {
+  int64_t     start_ms;
+  int64_t     duration_ms;
+  int32_t     id;
+  char        buff[16];
+  char        name[COUNTDOWN_TIMER_NAME_MAX];
+  bool        paused;
+  time_t      last_update;
+} __attribute__((__packed__)) CountdownTimerV1;
+
+typedef struct {
+  int64_t     start_ms;
+  int64_t     duration_ms;
+  int32_t     id;
+  char        buff[16];
+  char        name[COUNTDOWN_TIMER_NAME_MAX];
+  bool        paused;
+  time_t      last_update;
+  int64_t     snooze_ms;
+} __attribute__((__packed__)) CountdownTimerV2;
+
+/*
  * the structure of a CountdownTimer
  */
 
@@ -80,6 +105,8 @@ struct CountdownTimer {
   char        name[COUNTDOWN_TIMER_NAME_MAX]; //< optional user-defined label
   bool        paused;       //< current state
   time_t      last_update;
+  int64_t     snooze_ms;    //< per-timer snooze duration in milliseconds
+  int64_t     original_end_ms; //< epoch ms when original timer ended across snoozes (0 if none)
 } __attribute__((__packed__));
 
 
@@ -107,6 +134,8 @@ CountdownTimer *countdown_timer_create(int64_t duration, int32_t *current_id_max
     (*countdown_timer) = (CountdownTimer) {
       .duration_ms = duration,
       .paused = true,
+      .snooze_ms = countdown_timer_default_snooze_for_duration(duration),
+      .original_end_ms = 0,
     };
     countdown_timer_rand_id(countdown_timer, current_id_max);
     return countdown_timer;
@@ -182,6 +211,7 @@ void countdown_timer_update(CountdownTimer *countdown_timer, int64_t duration,
   int64_t now = countdown_timer_get_epoch_ms();
   countdown_timer->start_ms = ((countdown_timer->paused) ? 0 : now)
     + duration - countdown_timer->duration_ms;
+  countdown_timer->original_end_ms = 0;
   countdown_timer->last_update = time(NULL);
 }
 
@@ -204,6 +234,10 @@ CountdownTimer *countdown_timer_check_ended(CountdownTimer **timer_array,
     // check if expired and not paused
     if (!timer_array[ii]->paused &&
         timer_array[ii]->start_ms + timer_array[ii]->duration_ms <= now) {
+      int64_t ended_at = timer_array[ii]->start_ms + timer_array[ii]->duration_ms;
+      if (timer_array[ii]->original_end_ms <= 0 || timer_array[ii]->original_end_ms > now) {
+        timer_array[ii]->original_end_ms = (ended_at <= now) ? ended_at : now;
+      }
       timer_array[ii]->start_ms = COUNTDOWN_TIMER_EXPIRED;
       timer_array[ii]->paused = true;
       if (return_timer == NULL) {
@@ -404,11 +438,15 @@ void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array
     return;
   }
   for (int32_t ii = 0; ii < stored_count; ii++, key++) {
-    // Reject blobs that weren't written by this exact CountdownTimer layout.
-    // A size mismatch means the persisted data came from a different struct
-    // (an older app or the Rebble-store build) and would otherwise be read as
-    // garbage, producing the nonsense "IP-like" timer values.
-    if (!persist_exists(key) || persist_get_size(key) != (int)sizeof(CountdownTimer)) {
+    if (!persist_exists(key)) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: missing blob");
+      countdown_timer_list_destroy_all(timer_array, timer_array_count);
+      return;
+    }
+    int blob_size = persist_get_size(key);
+    bool is_v1 = (blob_size == (int)sizeof(CountdownTimerV1));
+    bool is_v2 = (blob_size == (int)sizeof(CountdownTimerV2));
+    if (blob_size != (int)sizeof(CountdownTimer) && !is_v1 && !is_v2) {
       APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: incompatible blob size");
       countdown_timer_list_destroy_all(timer_array, timer_array_count);
       return;
@@ -418,7 +456,43 @@ void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array
       APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to allocate memory while loading timers!");
       return;
     }
-    persist_read_data(key, timer, sizeof(CountdownTimer));
+    if (is_v1) {
+      CountdownTimerV1 v1 = {0};
+      persist_read_data(key, &v1, sizeof(CountdownTimerV1));
+      memset(timer, 0, sizeof(CountdownTimer));
+      timer->start_ms = v1.start_ms;
+      timer->duration_ms = v1.duration_ms;
+      timer->id = v1.id;
+      memcpy(timer->buff, v1.buff, sizeof(timer->buff));
+      memcpy(timer->name, v1.name, sizeof(timer->name));
+      timer->paused = v1.paused;
+      timer->last_update = v1.last_update;
+      timer->snooze_ms = countdown_timer_default_snooze_for_duration(v1.duration_ms);
+      timer->original_end_ms = 0;
+    } else if (is_v2) {
+      CountdownTimerV2 v2 = {0};
+      persist_read_data(key, &v2, sizeof(CountdownTimerV2));
+      memset(timer, 0, sizeof(CountdownTimer));
+      timer->start_ms = v2.start_ms;
+      timer->duration_ms = v2.duration_ms;
+      timer->id = v2.id;
+      memcpy(timer->buff, v2.buff, sizeof(timer->buff));
+      memcpy(timer->name, v2.name, sizeof(timer->name));
+      timer->paused = v2.paused;
+      timer->last_update = v2.last_update;
+      timer->snooze_ms = (v2.snooze_ms < COUNTDOWN_TIMER_MIN_SNOOZE_MS)
+        ? countdown_timer_default_snooze_for_duration(v2.duration_ms)
+        : v2.snooze_ms;
+      timer->original_end_ms = 0;
+    } else {
+      persist_read_data(key, timer, sizeof(CountdownTimer));
+      if (timer->snooze_ms < COUNTDOWN_TIMER_MIN_SNOOZE_MS) {
+        timer->snooze_ms = countdown_timer_default_snooze_for_duration(timer->duration_ms);
+      }
+      if (timer->original_end_ms < 0) {
+        timer->original_end_ms = 0;
+      }
+    }
     timer->name[COUNTDOWN_TIMER_NAME_MAX - 1] = '\0';
     // Reject blobs whose contents are nonsensical even though the size matched
     // (e.g. same-sized foreign data). A zero/negative duration would later
@@ -617,5 +691,83 @@ void countdown_timer_set_name(CountdownTimer *countdown_timer, const char *name)
     countdown_timer->name[len] = '\0';
   }
   countdown_timer->last_update = time(NULL);
+}
+
+int64_t countdown_timer_default_snooze_for_duration(int64_t duration_ms) {
+  int64_t half_sec = (duration_ms / MSEC_IN_SEC) / 2;
+  int64_t snooze_ms = half_sec * MSEC_IN_SEC;
+  if (snooze_ms > COUNTDOWN_TIMER_DEFAULT_SNOOZE_MS) {
+    snooze_ms = COUNTDOWN_TIMER_DEFAULT_SNOOZE_MS;
+  }
+  if (snooze_ms < COUNTDOWN_TIMER_MIN_SNOOZE_MS) {
+    snooze_ms = COUNTDOWN_TIMER_MIN_SNOOZE_MS;
+  }
+  return snooze_ms;
+}
+
+int64_t countdown_timer_get_snooze(CountdownTimer *countdown_timer) {
+  if (countdown_timer == NULL) {
+    return COUNTDOWN_TIMER_DEFAULT_SNOOZE_MS;
+  }
+  if (countdown_timer->snooze_ms < COUNTDOWN_TIMER_MIN_SNOOZE_MS) {
+    return countdown_timer_default_snooze_for_duration(countdown_timer->duration_ms);
+  }
+  return countdown_timer->snooze_ms;
+}
+
+void countdown_timer_set_snooze(CountdownTimer *countdown_timer, int64_t snooze_ms) {
+  if (countdown_timer == NULL) {
+    return;
+  }
+  if (snooze_ms < COUNTDOWN_TIMER_MIN_SNOOZE_MS) {
+    snooze_ms = COUNTDOWN_TIMER_MIN_SNOOZE_MS;
+  }
+  countdown_timer->snooze_ms = snooze_ms;
+  countdown_timer->last_update = time(NULL);
+}
+
+void countdown_timer_snooze(CountdownTimer *countdown_timer) {
+  if (countdown_timer == NULL) {
+    return;
+  }
+  int64_t now = countdown_timer_get_epoch_ms();
+  int64_t saved_origin = countdown_timer->original_end_ms;
+  if (saved_origin <= 0 || saved_origin > now) {
+    saved_origin = now;
+  }
+  countdown_timer_update(countdown_timer, countdown_timer_get_snooze(countdown_timer), false);
+  countdown_timer->original_end_ms = saved_origin;
+  countdown_timer_start(countdown_timer);
+}
+
+int64_t countdown_timer_get_original_end(CountdownTimer *countdown_timer) {
+  if (countdown_timer == NULL) {
+    return 0;
+  }
+  return countdown_timer->original_end_ms;
+}
+
+void countdown_timer_clear_original_end(CountdownTimer *countdown_timer) {
+  if (countdown_timer != NULL) {
+    countdown_timer->original_end_ms = 0;
+  }
+}
+
+void countdown_timer_format_overtime(int64_t elapsed_ms, char *buff, size_t size) {
+  if (buff == NULL || size == 0) {
+    return;
+  }
+  if (elapsed_ms < 0) {
+    elapsed_ms = 0;
+  }
+  int64_t total_sec = elapsed_ms / MSEC_IN_SEC;
+  int64_t hr = total_sec / 3600;
+  int64_t min = (total_sec % 3600) / 60;
+  int64_t sec = total_sec % 60;
+  if (hr > 0) {
+    snprintf(buff, size, "+%ld:%02ld:%02ld", (long)hr, (long)min, (long)sec);
+  } else {
+    snprintf(buff, size, "+%ld:%02ld", (long)min, (long)sec);
+  }
 }
 

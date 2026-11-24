@@ -3,9 +3,11 @@
 #include "phone.h"
 #include "presets.h"
 
-#define PHONE_TIMERS_BUF_SIZE 448
+#define PHONE_TIMERS_BUF_SIZE 512
 #define PHONE_TIMER_MIN_SEC 5
 #define PHONE_TIMER_MAX_SEC 359999
+#define PHONE_SNOOZE_DEFAULT_SEC (COUNTDOWN_TIMER_DEFAULT_SNOOZE_MS / 1000)
+#define PHONE_SNOOZE_MIN_SEC (COUNTDOWN_TIMER_MIN_SNOOZE_MS / 1000)
 
 static PhoneCallbacks s_callbacks = {0};
 static bool s_resend_needed = false;
@@ -62,6 +64,7 @@ static uint8_t prv_parse_timers_data(const char *data, PhoneTimerSpec *specs, ui
     int64_t id_val = 0;
     int64_t dur_sec = 0;
     int64_t flags = 0;
+    int64_t snooze_sec = 0;
 
     bool ok = prv_parse_int64(&line, &id_val) && (*line == '|');
     if (ok) {
@@ -80,7 +83,16 @@ static uint8_t prv_parse_timers_data(const char *data, PhoneTimerSpec *specs, ui
       continue;
     }
 
-    line++; // skip '|' before name
+    line++; // skip '|' after flags
+
+    // Support both 5-field (id|dur|flags|snooze|name) and legacy 4-field (id|dur|flags|name)
+    const char *probe = line;
+    int64_t parsed_snooze = 0;
+    if (prv_parse_int64(&probe, &parsed_snooze) && (*probe == '|')) {
+      snooze_sec = parsed_snooze;
+      line = probe + 1;
+    }
+
     const char *name_start = line;
     while (*line != '\0' && *line != '\n' && *line != '\r') {
       line++;
@@ -95,10 +107,21 @@ static uint8_t prv_parse_timers_data(const char *data, PhoneTimerSpec *specs, ui
       dur_sec = PHONE_TIMER_MAX_SEC;
     }
 
+    int64_t snooze_ms;
+    if (snooze_sec < PHONE_SNOOZE_MIN_SEC) {
+      snooze_ms = countdown_timer_default_snooze_for_duration(dur_sec * 1000);
+    } else {
+      if (snooze_sec > PHONE_TIMER_MAX_SEC) {
+        snooze_sec = PHONE_TIMER_MAX_SEC;
+      }
+      snooze_ms = snooze_sec * 1000;
+    }
+
     PhoneTimerSpec *spec = &specs[count];
     memset(spec, 0, sizeof(*spec));
     spec->id = (int32_t)id_val;
     spec->duration_ms = dur_sec * 1000;
+    spec->snooze_ms = snooze_ms;
     spec->start_immediately = (flags & 1) != 0;
     if (name_len >= COUNTDOWN_TIMER_NAME_MAX) {
       name_len = COUNTDOWN_TIMER_NAME_MAX - 1;
@@ -224,12 +247,14 @@ void phone_send_state(CountdownTimer **timers, uint8_t count) {
     }
     int32_t id = countdown_timer_get_id(t);
     int32_t dur_sec = (int32_t)((countdown_timer_get_duration(t) + 500) / 1000);
+    int32_t snooze_sec = (int32_t)((countdown_timer_get_snooze(t) + 500) / 1000);
     int running = countdown_timer_get_paused(t) ? 0 : 1;
     char safe_name[COUNTDOWN_TIMER_NAME_MAX];
     prv_sanitize_name(safe_name, sizeof(safe_name), countdown_timer_get_name(t));
 
-    int written = snprintf(buf + pos, sizeof(buf) - pos, "%s%ld|%ld|%d|%s",
-                           (pos > 0) ? "\n" : "", (long)id, (long)dur_sec, running, safe_name);
+    int written = snprintf(buf + pos, sizeof(buf) - pos, "%s%ld|%ld|%d|%ld|%s",
+                           (pos > 0) ? "\n" : "", (long)id, (long)dur_sec, running,
+                           (long)snooze_sec, safe_name);
     if (written < 0 || (size_t)written >= sizeof(buf) - pos) {
       break;
     }

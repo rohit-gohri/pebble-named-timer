@@ -61,6 +61,7 @@ struct SettingWindow {
   SettingWindowCallbacks callbacks;   //< callbacks
 
   CountdownTimer  *countdown_timer;   //< timer associated being set
+  SettingWindowMode mode;             //< duration vs snooze edit mode
   int32_t         field_values[3];    //< values of selection fields
   char            field_buffs[3][3];  //< buffers to draw field contents
   int8_t          field_selection;    //< index of selected field
@@ -79,6 +80,10 @@ struct SettingWindow {
  */
 
 static void update_sub_text(SettingWindow *setting_window) {
+  if (setting_window->mode == SETTING_WINDOW_MODE_SNOOZE) {
+    layer_set_hidden(text_layer_get_layer(setting_window->sub_text), true);
+    return;
+  }
   int64_t duration = (int64_t)setting_window->field_values[0] * MSEC_IN_HR +
     (int64_t)setting_window->field_values[1] * MSEC_IN_MIN +
     (int64_t)setting_window->field_values[2] * MSEC_IN_SEC;
@@ -217,7 +222,8 @@ static void prv_window_load(Window* window){
   GRect bounds = layer_get_frame(root);
   // main text
   setting_window->main_text = text_layer_create(GRect(0, bounds.size.h/7, bounds.size.w, 40));
-  text_layer_set_text(setting_window->main_text, "Set Timer");
+  text_layer_set_text(setting_window->main_text,
+    (setting_window->mode == SETTING_WINDOW_MODE_SNOOZE) ? "Set Snooze" : "Set Timer");
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
   text_layer_set_font(setting_window->main_text,
     fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
@@ -333,20 +339,31 @@ bool setting_window_get_topmost_window(SettingWindow *setting_window) {
  * used to identify if this was an update to an existing timer or a new one
  */
 
-void setting_window_set_timer(SettingWindow *setting_window, CountdownTimer *countdown_timer) {
-  setting_window->countdown_timer = countdown_timer;
-  // set selection values if a timer was passed in
+static void prv_sync_field_values(SettingWindow *setting_window) {
   int64_t duration = 0;
   if (setting_window->countdown_timer) {
-    duration = countdown_timer_get_duration(setting_window->countdown_timer);
+    if (setting_window->mode == SETTING_WINDOW_MODE_SNOOZE) {
+      duration = countdown_timer_get_snooze(setting_window->countdown_timer);
+    } else {
+      duration = countdown_timer_get_duration(setting_window->countdown_timer);
+    }
+  } else if (setting_window->mode == SETTING_WINDOW_MODE_SNOOZE) {
+    duration = COUNTDOWN_TIMER_DEFAULT_SNOOZE_MS;
   }
   setting_window->field_values[0] = duration / MSEC_IN_HR;
   setting_window->field_values[1] = duration % MSEC_IN_HR / MSEC_IN_MIN;
   setting_window->field_values[2] = duration % MSEC_IN_MIN / MSEC_IN_SEC;
-  // change text
   if (setting_window->window) {
+    text_layer_set_text(setting_window->main_text,
+      (setting_window->mode == SETTING_WINDOW_MODE_SNOOZE) ? "Set Snooze" : "Set Timer");
     update_sub_text(setting_window);
+    layer_mark_dirty(setting_window->selection);
   }
+}
+
+void setting_window_set_timer(SettingWindow *setting_window, CountdownTimer *countdown_timer) {
+  setting_window->countdown_timer = countdown_timer;
+  prv_sync_field_values(setting_window);
 }
 
 
@@ -370,4 +387,13 @@ CountdownTimer *setting_window_get_timer(SettingWindow *setting_window) {
 
 void setting_window_set_highlight_color(SettingWindow *setting_window, GColor color) {
   setting_window->highlight_color = color;
+}
+
+void setting_window_set_mode(SettingWindow *setting_window, SettingWindowMode mode) {
+  setting_window->mode = mode;
+  prv_sync_field_values(setting_window);
+}
+
+SettingWindowMode setting_window_get_mode(SettingWindow *setting_window) {
+  return setting_window->mode;
 }

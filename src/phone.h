@@ -8,6 +8,7 @@
 typedef struct {
   int32_t id;
   int64_t duration_ms;
+  int64_t snooze_ms;
   bool start_immediately;
   char name[COUNTDOWN_TIMER_NAME_MAX];
 } PhoneTimerSpec;

@@ -89,6 +89,7 @@ struct PopupWindow {
   Window          *window;        //< main window
   Layer           *layer;         //< drawing layer for PDC or image
   TextLayer       *text;          //< displays title text
+  TextLayer       *overtime_text; //< displays +M:SS overtime counter
   ActionBarLayer  *action;        //< optional action bar for dialogs
   PopupWindowCallbacks    callbacks;     //< callbacks for optional ActionBar
   GBitmap *snooze_icon,   *stop_icon;    //< icons for ActionBar
@@ -106,6 +107,14 @@ struct PopupWindow {
   CountdownTimer  *countdown_timer;    //< timer associated with PopupWindow
   int64_t     set_time, close_time;    //< time opened and time to close
   bool            action_visible;      //< whether the ActionBar is visible
+
+  bool            overtime_enabled;    //< whether overtime counter is active
+  int64_t         overtime_start_ms;   //< epoch ms when overtime started
+  int64_t         overtime_last_sec;   //< last rendered overtime second
+  int64_t         repeat_interval_ms;  //< auto-repeat alert interval (ms)
+  int64_t         next_repeat_ms;      //< next epoch ms to trigger alert
+  bool            repeat_chime;        //< whether to chime on repeat alerts
+  char            overtime_buff[16];   //< formatted "+0:00" text buffer
 
   GColor highlight_color;
   const char* title;
@@ -158,13 +167,16 @@ static void layers_center_in_window(PopupWindow *popup_window) {
   GRect window_frame = layer_get_frame(window_get_root_layer(popup_window->window));
   int16_t content_w = window_frame.size.w - (popup_window->action_visible ? horiz_off : 0);
   int16_t icon_bottom = window_frame.size.h / 2;
+  int16_t y_shift = popup_window->overtime_enabled
+    ? PBL_IF_ROUND_ELSE(24, 34)
+    : PBL_IF_ROUND_ELSE(12, 20);
 
 #ifndef PBL_PLATFORM_APLITE
-  // change layer size based on PDC size, positioned slightly above center to leave room for 2-line title
+  // change layer size based on PDC size, positioned slightly above center to leave room for title
   GSize pdc_frame = gdraw_command_sequence_get_bounds_size(popup_window->draw_sequence);
   GRect layer_frame = GRect(0, 0, pdc_frame.w, pdc_frame.h);
   layer_frame.origin.x = (content_w - pdc_frame.w) / 2;
-  layer_frame.origin.y = (window_frame.size.h - pdc_frame.h) / 2 - PBL_IF_ROUND_ELSE(12, 20);
+  layer_frame.origin.y = (window_frame.size.h - pdc_frame.h) / 2 - y_shift;
   layer_set_frame(popup_window->layer, layer_frame);
   icon_bottom = layer_frame.origin.y + layer_frame.size.h;
 #else
@@ -172,18 +184,32 @@ static void layers_center_in_window(PopupWindow *popup_window) {
   GRect image_frame = gbitmap_get_bounds(popup_window->image);
   GRect layer_frame = image_frame;
   layer_frame.origin.x = (content_w - image_frame.size.w) / 2;
-  layer_frame.origin.y = (window_frame.size.h - image_frame.size.h) / 2 - 18;
+  layer_frame.origin.y = (window_frame.size.h - image_frame.size.h) / 2 - y_shift;
   layer_set_frame(popup_window->layer, layer_frame);
   icon_bottom = layer_frame.origin.y + layer_frame.size.h;
 #endif
 
   // center the text layer cleanly below the PDC/image with room for "<Name>\nTime's Up!"
   int16_t text_margin = PBL_IF_ROUND_ELSE(24, 6);
-  int16_t text_gap = PBL_IF_ROUND_ELSE(-4, 6);
-  GRect text_frame = GRect(text_margin, icon_bottom + text_gap, content_w - text_margin * 2, 54);
+  int16_t text_gap = PBL_IF_ROUND_ELSE(-4, 4);
+  int16_t text_h = popup_window->overtime_enabled ? 44 : 54;
+  GRect text_frame = GRect(text_margin, icon_bottom + text_gap, content_w - text_margin * 2, text_h);
   layer_set_frame(text_layer_get_layer(popup_window->text), text_frame);
   layer_set_bounds(text_layer_get_layer(popup_window->text),
                    GRect(0, 0, text_frame.size.w, text_frame.size.h));
+
+  if (popup_window->overtime_text != NULL) {
+    if (popup_window->overtime_enabled) {
+      int16_t ot_y = text_frame.origin.y + text_frame.size.h + PBL_IF_ROUND_ELSE(-2, 0);
+      GRect ot_frame = GRect(text_margin, ot_y, content_w - text_margin * 2, 32);
+      layer_set_frame(text_layer_get_layer(popup_window->overtime_text), ot_frame);
+      layer_set_bounds(text_layer_get_layer(popup_window->overtime_text),
+                       GRect(0, 0, ot_frame.size.w, ot_frame.size.h));
+      layer_set_hidden(text_layer_get_layer(popup_window->overtime_text), false);
+    } else {
+      layer_set_hidden(text_layer_get_layer(popup_window->overtime_text), true);
+    }
+  }
 }
 
 
@@ -311,12 +337,17 @@ static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
  */
 
 static void click_config_provider(void *context) {
+  PopupWindow *popup_window = (PopupWindow *)context;
   window_set_click_context(BUTTON_ID_UP, context);
   window_set_click_context(BUTTON_ID_SELECT, context);
   window_set_click_context(BUTTON_ID_DOWN, context);
   window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
+  if (popup_window != NULL && popup_window->callbacks.down_click != NULL) {
+    window_set_click_context(BUTTON_ID_BACK, context);
+    window_single_click_subscribe(BUTTON_ID_BACK, down_click_handler);
+  }
 }
 
 static void prv_window_load(Window* window){
@@ -341,6 +372,22 @@ static void prv_window_load(Window* window){
   text_layer_set_background_color(popup_window->text, GColorClear);
   text_layer_set_text(popup_window->text, popup_window->title);
   layer_add_child(root, text_layer_get_layer(popup_window->text));
+  // overtime text
+  popup_window->overtime_text = text_layer_create(GRect(0, 170, bounds.size.w, 32));
+  text_layer_set_font(popup_window->overtime_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(popup_window->overtime_text, GTextAlignmentCenter);
+  text_layer_set_background_color(popup_window->overtime_text, GColorClear);
+  if (popup_window->overtime_enabled) {
+    int64_t elapsed = countdown_timer_get_epoch_ms() - popup_window->overtime_start_ms;
+    countdown_timer_format_overtime(elapsed, popup_window->overtime_buff,
+                                    sizeof(popup_window->overtime_buff));
+    popup_window->overtime_last_sec = (elapsed > 0) ? (elapsed / 1000) : 0;
+    text_layer_set_text(popup_window->overtime_text, popup_window->overtime_buff);
+  } else {
+    popup_window->overtime_buff[0] = '\0';
+    text_layer_set_text(popup_window->overtime_text, "");
+  }
+  layer_add_child(root, text_layer_get_layer(popup_window->overtime_text));
   // create action bar
   popup_window->action = action_bar_layer_create();
   action_bar_layer_set_context(popup_window->action, popup_window);
@@ -367,6 +414,8 @@ static void prv_window_unload(Window* window){
     accel_tap_service_unsubscribe();
   }
   action_bar_layer_destroy(popup_window->action);
+  text_layer_destroy(popup_window->overtime_text);
+  popup_window->overtime_text = NULL;
   text_layer_destroy(popup_window->text);
   layer_destroy(popup_window->layer);
   window_destroy(popup_window->window);
@@ -413,16 +462,8 @@ PopupWindow *popup_window_create(void) {
   }
 
   // zero some values
-  popup_window->countdown_timer = NULL;
-  popup_window->action_visible = false;
-#ifndef PBL_PLATFORM_APLITE
-  popup_window->draw_sequence = NULL;
-  popup_window->draw_frame = NULL;
-  popup_window->frame_count = 0;
-  popup_window->frame_index = 0;
-#else
-  popup_window->image = NULL;
-#endif
+  memset(popup_window, 0, sizeof(PopupWindow));
+  popup_window->overtime_last_sec = -1;
   return popup_window;
 }
 
@@ -451,12 +492,19 @@ void popup_window_destroy(PopupWindow *popup_window) {
 void popup_window_push(PopupWindow *popup_window, bool animated) {
   if (popup_window->window == NULL) {
     popup_window->window = window_create();
-    window_set_user_data(popup_window->window, popup_window);
-    window_set_window_handlers(popup_window->window,
-      (WindowHandlers){
-        .load = prv_window_load,
-        .unload = prv_window_unload
-      });
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+    if (popup_window->window != NULL) {
+      window_set_touch_bridge_disabled(popup_window->window, true);
+    }
+#endif
+    if (popup_window->window != NULL) {
+      window_set_user_data(popup_window->window, popup_window);
+      window_set_window_handlers(popup_window->window,
+        (WindowHandlers){
+          .load = prv_window_load,
+          .unload = prv_window_unload
+        });
+    }
   }
   if (popup_window->window) {
     window_stack_push(popup_window->window, animated);
@@ -532,6 +580,13 @@ void popup_window_set_countdown_timer(PopupWindow *popup_window, CountdownTimer 
   popup_window->countdown_timer = countdown_timer;
 }
 
+CountdownTimer *popup_window_get_countdown_timer(PopupWindow *popup_window) {
+  if (popup_window == NULL) {
+    return NULL;
+  }
+  return popup_window->countdown_timer;
+}
+
 
 
 /*
@@ -543,6 +598,32 @@ void popup_window_refresh(PopupWindow *popup_window) {
   // check if it should auto-pop
   if (popup_window->close_time != 0 && popup_window->close_time <= current_time) {
     popup_window_pop(popup_window, true);
+    return;
+  }
+
+  // update overtime counter & repeating snooze-interval reminder alert
+  if (popup_window->overtime_enabled) {
+    int64_t elapsed_ms = current_time - popup_window->overtime_start_ms;
+    if (elapsed_ms < 0) {
+      elapsed_ms = 0;
+    }
+    int64_t elapsed_sec = elapsed_ms / 1000;
+    if (elapsed_sec != popup_window->overtime_last_sec) {
+      popup_window->overtime_last_sec = elapsed_sec;
+      countdown_timer_format_overtime(elapsed_ms, popup_window->overtime_buff,
+                                      sizeof(popup_window->overtime_buff));
+      if (popup_window->overtime_text != NULL) {
+        text_layer_set_text(popup_window->overtime_text, popup_window->overtime_buff);
+      }
+    }
+    if (popup_window->repeat_interval_ms > 0 &&
+        popup_window->next_repeat_ms > 0 &&
+        current_time >= popup_window->next_repeat_ms) {
+      while (popup_window->next_repeat_ms <= current_time) {
+        popup_window->next_repeat_ms += popup_window->repeat_interval_ms;
+      }
+      popup_window_set_vibes(popup_window->repeat_chime);
+    }
   }
 
   // step animation
@@ -617,6 +698,46 @@ void popup_window_set_image(PopupWindow *popup_window, uint32_t resource_id) {
 
 void popup_window_set_title(PopupWindow *popup_window, const char *text) {
   popup_window->title = text;
+  if (popup_window->window != NULL && popup_window->text != NULL) {
+    text_layer_set_text(popup_window->text, popup_window->title);
+  }
+}
+
+void popup_window_set_overtime(PopupWindow *popup_window, bool enabled, int64_t origin_ms,
+                               int64_t repeat_interval_ms, bool chime) {
+  popup_window->overtime_enabled = enabled;
+  popup_window->overtime_last_sec = -1;
+  popup_window->repeat_chime = chime;
+  int64_t now = countdown_timer_get_epoch_ms();
+  if (enabled) {
+    popup_window->overtime_start_ms = (origin_ms > 0 && origin_ms <= now) ? origin_ms : now;
+    popup_window->repeat_interval_ms = repeat_interval_ms;
+    popup_window->next_repeat_ms = (repeat_interval_ms > 0)
+      ? (now + repeat_interval_ms)
+      : 0;
+  } else {
+    popup_window->overtime_start_ms = 0;
+    popup_window->repeat_interval_ms = 0;
+    popup_window->next_repeat_ms = 0;
+    popup_window->overtime_buff[0] = '\0';
+  }
+  if (popup_window->window != NULL) {
+    layers_center_in_window(popup_window);
+    if (popup_window->overtime_text != NULL) {
+      if (enabled) {
+        int64_t elapsed = now - popup_window->overtime_start_ms;
+        if (elapsed < 0) {
+          elapsed = 0;
+        }
+        countdown_timer_format_overtime(elapsed, popup_window->overtime_buff,
+                                        sizeof(popup_window->overtime_buff));
+        popup_window->overtime_last_sec = elapsed / 1000;
+        text_layer_set_text(popup_window->overtime_text, popup_window->overtime_buff);
+      } else {
+        text_layer_set_text(popup_window->overtime_text, "");
+      }
+    }
+  }
 }
 
 

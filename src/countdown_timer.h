@@ -417,7 +417,16 @@ CountdownTimer *countdown_timer_list_get_closest_timer_after(CountdownTimer **ti
 time_t countdown_timer_get_last_update(CountdownTimer *countdown_timer);
 
 #define COUNTDOWN_TIMER_NAME_MAX 24
+#define COUNTDOWN_TIMER_DEFAULT_SNOOZE_MS 60000
+#define COUNTDOWN_TIMER_MIN_SNOOZE_MS 5000
 
 const char *countdown_timer_get_name(CountdownTimer *countdown_timer);
 bool countdown_timer_has_name(CountdownTimer *countdown_timer);
 void countdown_timer_set_name(CountdownTimer *countdown_timer, const char *name);
+int64_t countdown_timer_default_snooze_for_duration(int64_t duration_ms);
+int64_t countdown_timer_get_snooze(CountdownTimer *countdown_timer);
+void countdown_timer_set_snooze(CountdownTimer *countdown_timer, int64_t snooze_ms);
+void countdown_timer_snooze(CountdownTimer *countdown_timer);
+int64_t countdown_timer_get_original_end(CountdownTimer *countdown_timer);
+void countdown_timer_clear_original_end(CountdownTimer *countdown_timer);
+void countdown_timer_format_overtime(int64_t elapsed_ms, char *buff, size_t size);

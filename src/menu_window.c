@@ -22,6 +22,7 @@
 #include <pebble.h>
 #include "menu_window.h"
 #include "countdown_timer.h"
+#include "wrap_menu.h"
 
 // Constants
 #ifdef PBL_ROUND
@@ -53,6 +54,7 @@ struct MenuWindow {
   TextLayer   *text;      //< text layer which displays "No Timers"
   GBitmap     *play_icon, *pause_icon;    //< menu layer icons
   StatusBarLayer      *status;            //< status bar for Basalt
+  WrapMenuConfig      wrap_menu;          //< wrap-around UP/DOWN navigation
   MenuWindowCallbacks callbacks;          //< menu layer callbacks
 };
 
@@ -83,6 +85,11 @@ static uint16_t menu_get_num_rows_callback(MenuLayer *menu_layer, uint16_t secti
   MenuWindow *menu_window = (MenuWindow*)context;
   return menu_window->callbacks.get_timer_count(context) + 1 +
     (menu_window->callbacks.get_sound_enabled != NULL);
+}
+
+static uint16_t prv_menu_get_row_count(void *context) {
+  MenuWindow *mw = (MenuWindow *)context;
+  return menu_get_num_rows_callback(mw->menu, 0, mw);
 }
 
 
@@ -179,8 +186,9 @@ static void menu_cell_draw_named(GContext *ctx, const Layer *layer, const char *
   GRect img_bounds = icon ? gbitmap_get_bounds(icon) : GRectZero;
 
 #ifdef PBL_ROUND
+  int16_t y_off = (!progress && lay_bounds.size.h > 64) ? 6 : 0;
   int16_t name_margin = 34;
-  GRect name_rect = GRect(name_margin, 3, lay_bounds.size.w - name_margin * 2, 22);
+  GRect name_rect = GRect(name_margin, 3 + y_off, lay_bounds.size.w - name_margin * 2, 22);
   graphics_draw_text(ctx, name, name_font, name_rect, GTextOverflowModeTrailingEllipsis,
                      GTextAlignmentCenter, NULL);
 
@@ -191,7 +199,7 @@ static void menu_cell_draw_named(GContext *ctx, const Layer *layer, const char *
 
   if (icon) {
     img_bounds.origin.x = start_x;
-    img_bounds.origin.y = 25;
+    img_bounds.origin.y = 25 + y_off;
 #ifdef PBL_COLOR
     graphics_context_set_compositing_mode(ctx, GCompOpAnd);
 #else
@@ -203,7 +211,7 @@ static void menu_cell_draw_named(GContext *ctx, const Layer *layer, const char *
     graphics_context_set_compositing_mode(ctx, GCompOpAssign);
   }
 
-  GRect time_rect = GRect(start_x + img_bounds.size.w, 22, time_size.w + 4, 28);
+  GRect time_rect = GRect(start_x + img_bounds.size.w, 22 + y_off, time_size.w + 4, 28);
   graphics_draw_text(ctx, time_str, time_font, time_rect, GTextOverflowModeFill,
                      GTextAlignmentLeft, NULL);
 
@@ -234,11 +242,12 @@ static void menu_cell_draw_named(GContext *ctx, const Layer *layer, const char *
 
   int16_t text_x = img_bounds.size.w;
   int16_t text_w = lay_bounds.size.w - text_x - 8;
-  GRect name_rect = GRect(text_x, 4, text_w, 22);
+  int16_t text_y_off = progress ? 0 : 3;
+  GRect name_rect = GRect(text_x, 4 + text_y_off, text_w, 22);
   graphics_draw_text(ctx, name, name_font, name_rect, GTextOverflowModeTrailingEllipsis,
                      GTextAlignmentLeft, NULL);
 
-  GRect time_rect = GRect(text_x, 22, text_w, 28);
+  GRect time_rect = GRect(text_x, 22 + text_y_off, text_w, 28);
   graphics_draw_text(ctx, time_str, time_font, time_rect, GTextOverflowModeFill,
                      GTextAlignmentLeft, NULL);
 
@@ -351,7 +360,8 @@ static MenuWindow *menu_window_init(MenuWindow *menu_window,
       .select_click = menu_select_callback,
       .get_cell_height = menu_get_row_height_callback,
     });
-    menu_layer_set_click_config_onto_window(menu_window->menu, menu_window->window);
+    wrap_menu_attach(&menu_window->wrap_menu, menu_window->menu, menu_window->window,
+                     prv_menu_get_row_count, menu_window);
     layer_add_child(root, menu_layer_get_layer(menu_window->menu));
     // create text layer
 #ifdef PBL_ROUND
@@ -441,6 +451,9 @@ bool menu_window_get_topmost_window(MenuWindow *menu_window) {
  */
 
 void menu_window_refresh(MenuWindow *menu_window) {
+  if (menu_window == NULL || menu_window->menu == NULL) {
+    return;
+  }
   layer_mark_dirty(menu_layer_get_layer(menu_window->menu));
   uint8_t timer_count = menu_window->callbacks.get_timer_count(NULL);
   layer_set_hidden(text_layer_get_layer(menu_window->text), timer_count != 0);
@@ -453,6 +466,9 @@ void menu_window_refresh(MenuWindow *menu_window) {
  */
 
 void menu_window_reload_data(MenuWindow *menu_window) {
+  if (menu_window == NULL || menu_window->menu == NULL) {
+    return;
+  }
   // this makes the selected index go back to the top, but this is also desired
   menu_layer_reload_data(menu_window->menu);
 }

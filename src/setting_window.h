@@ -63,6 +63,19 @@ typedef struct SettingWindowCallbacks {
  */
 
 /*
+ * Enum:        SettingWindowMode
+ * ------------------------------
+ * selects whether the SettingWindow edits timer duration or snooze length
+ */
+
+typedef enum {
+  SETTING_WINDOW_MODE_DURATION = 0,
+  SETTING_WINDOW_MODE_SNOOZE,
+} SettingWindowMode;
+
+
+
+/*
  * Structure:   SettingWindow
  * -----------------------
  * main structure containing all data for a SettingWindow
@@ -178,3 +191,6 @@ CountdownTimer *setting_window_get_timer(SettingWindow *setting_window);
  */
 
 void setting_window_set_highlight_color(SettingWindow *setting_window, GColor color);
+
+void setting_window_set_mode(SettingWindow *setting_window, SettingWindowMode mode);
+SettingWindowMode setting_window_get_mode(SettingWindow *setting_window);

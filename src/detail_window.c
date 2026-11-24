@@ -52,6 +52,7 @@ struct DetailWindow {
   Layer       *layer;     //< drawing layer
   TextLayer   *name_text; //< optional timer label above countdown
   TextLayer   *main_text; //< main, larger text
+  TextLayer   *overtime_text; //< cumulative overtime counter while snoozing
   TextLayer   *sub_text;  //< footer, small text
   ActionBarLayer *action; //< action bar
   GBitmap     *edit_icon, *play_icon, *pause_icon, *delete_icon;  //< icons
@@ -61,6 +62,7 @@ struct DetailWindow {
   DetailWindowCallbacks callbacks;    //< callbacks for button presses
 
   char        main_buff[12];          //< text buffer for main_text
+  char        overtime_buff[16];      //< text buffer for overtime_text
   char        sub_buff[12];           //< text buffer for sub_text
 
   bool        animation_update_needed;    //< whether it needs to be refreshed
@@ -265,6 +267,22 @@ static void prv_window_load(Window* window){
   text_layer_set_text_alignment(detail_window->main_text, GTextAlignmentCenter);
   text_layer_set_background_color(detail_window->main_text, GColorClear);
   layer_add_child(root, text_layer_get_layer(detail_window->main_text));
+  // create overtime text (shown while a snoozed timer is counting down)
+#ifdef PBL_ROUND
+  detail_window->overtime_text = text_layer_create(
+    GRect(0, bounds.size.h / 2 + text_sizes[0] / 2 + 8, bounds.size.w - ACTION_BAR_WIDTH, 28));
+#else
+  detail_window->overtime_text = text_layer_create(
+    GRect(0, bounds.size.h / 2 + text_sizes[0] / 2 - 8, bounds.size.w - ACTION_BAR_WIDTH, 28));
+#endif
+  text_layer_set_font(detail_window->overtime_text,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(detail_window->overtime_text, GTextAlignmentCenter);
+  text_layer_set_text_color(detail_window->overtime_text, GColorBlack);
+  text_layer_set_background_color(detail_window->overtime_text, GColorClear);
+  text_layer_set_text(detail_window->overtime_text, "");
+  layer_set_hidden(text_layer_get_layer(detail_window->overtime_text), true);
+  layer_add_child(root, text_layer_get_layer(detail_window->overtime_text));
   // create sub text
 #ifdef PBL_ROUND
   detail_window->sub_text = text_layer_create(
@@ -305,6 +323,8 @@ static void prv_window_unload(Window* window){
   status_bar_layer_destroy(detail_window->status);
   action_bar_layer_destroy(detail_window->action);
   text_layer_destroy(detail_window->sub_text);
+  text_layer_destroy(detail_window->overtime_text);
+  detail_window->overtime_text = NULL;
   text_layer_destroy(detail_window->main_text);
   text_layer_destroy(detail_window->name_text);
   layer_destroy(detail_window->layer);
@@ -361,12 +381,19 @@ void detail_window_destroy(DetailWindow *detail_window) {
 void detail_window_push(DetailWindow *detail_window, bool animated) {
   if (detail_window->window == NULL) {
     detail_window->window = window_create();
-    window_set_user_data(detail_window->window, detail_window);
-    window_set_window_handlers(detail_window->window,
-      (WindowHandlers){
-        .load = prv_window_load,
-        .unload = prv_window_unload
-      });
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+    if (detail_window->window != NULL) {
+      window_set_touch_bridge_disabled(detail_window->window, true);
+    }
+#endif
+    if (detail_window->window != NULL) {
+      window_set_user_data(detail_window->window, detail_window);
+      window_set_window_handlers(detail_window->window,
+        (WindowHandlers){
+          .load = prv_window_load,
+          .unload = prv_window_unload
+        });
+    }
   }
   if (detail_window->window) {
     window_stack_push(detail_window->window, animated);
@@ -443,6 +470,22 @@ void detail_window_refresh(DetailWindow *detail_window) {
     text_layer_set_font(detail_window->main_text, detail_window->medium_font);
   } else {
     text_layer_set_font(detail_window->main_text, detail_window->large_font);
+  }
+  // overtime text (cumulative since original timer end when snoozing)
+  int64_t original_end = countdown_timer_get_original_end(detail_window->countdown_timer);
+  if (original_end > 0) {
+    int64_t elapsed = countdown_timer_get_epoch_ms() - original_end;
+    if (elapsed < 0) {
+      elapsed = 0;
+    }
+    countdown_timer_format_overtime(elapsed, detail_window->overtime_buff,
+                                    sizeof(detail_window->overtime_buff));
+    text_layer_set_text(detail_window->overtime_text, detail_window->overtime_buff);
+    layer_set_hidden(text_layer_get_layer(detail_window->overtime_text), false);
+  } else {
+    detail_window->overtime_buff[0] = '\0';
+    text_layer_set_text(detail_window->overtime_text, "");
+    layer_set_hidden(text_layer_get_layer(detail_window->overtime_text), true);
   }
   // sub text
   countdown_timer_format_text(countdown_timer_get_duration(detail_window->countdown_timer),

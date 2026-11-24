@@ -222,6 +222,8 @@ void popup_window_set_vibes(bool chime);
 
 void popup_window_set_countdown_timer(PopupWindow *popup_window, CountdownTimer *countdown_timer);
 
+CountdownTimer *popup_window_get_countdown_timer(PopupWindow *popup_window);
+
 
 
 /*
@@ -285,6 +287,16 @@ void popup_window_set_image(PopupWindow *popup_window, uint32_t resource_id);
  */
 
 void popup_window_set_title(PopupWindow *popup_window, const char *text);
+
+/*
+ * Function:    popup_window_set_overtime
+ * --------------------------------------
+ * enables or disables the live overtime counter (+0:00, +0:01, ...) and
+ * optional repeating reminder alert at each repeat_interval_ms
+ */
+
+void popup_window_set_overtime(PopupWindow *popup_window, bool enabled, int64_t origin_ms,
+                               int64_t repeat_interval_ms, bool chime);
 
 
 

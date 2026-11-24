@@ -14,6 +14,7 @@
 #include "countdown_timer.h"
 #include "menu_window.h"
 #include "detail_window.h"
+#include "edit_menu_window.h"
 #include "name_window.h"
 #include "setting_window.h"
 #include "popup_window.h"
@@ -23,11 +24,10 @@
 // constants
 #define COUNTDOWN_TIMER_PERSIST_KEY 72445846
 #define COUNTDOWN_TIMER_ID_PERSIST_KEY 3568356
-#define PERSIST_VERSION 2
+#define PERSIST_VERSION 3
 #define PERSIST_VERSION_KEY 46134672
 #define SOUND_ENABLED_PERSIST_KEY 76863
 #define COUNTDOWN_TIMERS_MAX 8
-#define COUNTDOWN_TIMER_SNOOZE_DELAY 60000 // milliseconds
 #define TIMER_MIN_LENGTH 5000 // milliseconds
 #define INACTIVITY_THRESHOLD 900000 // length of time before refresh throttling in milliseconds
 #define INACTIVE_REFRESH_DELAY 1000 // ms between frames after throttling
@@ -37,19 +37,13 @@
 #define MIN_REFRESH_DELAY 25 // minimum delay when correcting near a boundary
 
 
-typedef enum {
-  PENDING_ACTION_NONE = 0,
-  PENDING_ACTION_EDIT_TIME,
-  PENDING_ACTION_EDIT_NAME,
-} PendingEditAction;
-
-
 /*******************************************************************************
  * MAIN LOCAL VARIABLES
  */
 
 static MenuWindow *s_menu_window = NULL;
 static DetailWindow *s_detail_window = NULL;
+static EditMenuWindow *s_edit_menu_window = NULL;
 static NameWindow *s_name_window = NULL;
 static SettingWindow *s_setting_window = NULL;
 static PopupWindow *s_popup_window = NULL;
@@ -60,11 +54,7 @@ static AppTimer *s_app_timer = NULL;
 static int64_t s_last_activity = 0;
 static bool s_sound_enabled = false;
 
-// Edit ActionMenu and Dictation state
-static ActionMenu *s_action_menu = NULL;
-static ActionMenuLevel *s_root_level = NULL;
-static CountdownTimer *s_edit_target_timer = NULL;
-static PendingEditAction s_pending_edit_action = PENDING_ACTION_NONE;
+// Dictation and popup title state
 static DictationSession *s_dictation_session = NULL;
 static CountdownTimer *s_dictation_target_timer = NULL;
 static char s_popup_title_buff[COUNTDOWN_TIMER_NAME_MAX + 16];
@@ -237,63 +227,26 @@ static void prv_name_window_preset_cb(CountdownTimer *timer, const char *preset_
   name_window_pop(s_name_window, true);
 }
 
-static void prv_action_edit_time_cb(ActionMenu *action_menu, const ActionMenuItem *action,
-                                    void *context) {
-  s_pending_edit_action = PENDING_ACTION_EDIT_TIME;
-}
-
-static void prv_action_edit_name_cb(ActionMenu *action_menu, const ActionMenuItem *action,
-                                    void *context) {
-  s_pending_edit_action = PENDING_ACTION_EDIT_NAME;
-}
-
-static void prv_action_menu_did_close(ActionMenu *menu, const ActionMenuItem *performed_action,
-                                      void *context) {
-  if (s_root_level != NULL) {
-    action_menu_hierarchy_destroy(s_root_level, NULL, NULL);
-    s_root_level = NULL;
-  }
-  s_action_menu = NULL;
-
-  PendingEditAction pending = s_pending_edit_action;
-  CountdownTimer *target = s_edit_target_timer;
-  s_pending_edit_action = PENDING_ACTION_NONE;
-  s_edit_target_timer = NULL;
-
-  if (target == NULL) {
+static void prv_edit_menu_select_cb(CountdownTimer *timer, EditMenuAction action, void *context) {
+  if (timer == NULL) {
     return;
   }
-  if (pending == PENDING_ACTION_EDIT_TIME) {
-    setting_window_set_timer(s_setting_window, target);
+  if (countdown_timer_list_get_timer_index(s_countdown_timers, s_countdown_timers_count, timer) < 0) {
+    return;
+  }
+  if (action == EDIT_MENU_ACTION_TIME) {
+    setting_window_set_mode(s_setting_window, SETTING_WINDOW_MODE_DURATION);
+    setting_window_set_timer(s_setting_window, timer);
     setting_window_push(s_setting_window, true);
-  } else if (pending == PENDING_ACTION_EDIT_NAME) {
-    name_window_set_timer(s_name_window, target);
+  } else if (action == EDIT_MENU_ACTION_NAME) {
+    name_window_set_timer(s_name_window, timer);
     name_window_push(s_name_window, true);
+  } else if (action == EDIT_MENU_ACTION_SNOOZE) {
+    setting_window_set_mode(s_setting_window, SETTING_WINDOW_MODE_SNOOZE);
+    setting_window_set_timer(s_setting_window, timer);
+    setting_window_push(s_setting_window, true);
   }
-}
-
-static void prv_open_edit_action_menu(CountdownTimer *timer) {
-  if (timer == NULL || s_action_menu != NULL) {
-    return;
-  }
-
-  s_edit_target_timer = timer;
-  s_pending_edit_action = PENDING_ACTION_NONE;
-
-  s_root_level = action_menu_level_create(2);
-  action_menu_level_add_action(s_root_level, "Edit Time", prv_action_edit_time_cb, NULL);
-  action_menu_level_add_action(s_root_level, "Edit Name", prv_action_edit_name_cb, NULL);
-
-  ActionMenuConfig config = (ActionMenuConfig) {
-    .root_level = s_root_level,
-    .colors = {
-      .background = PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite),
-      .foreground = GColorBlack,
-    },
-    .align = ActionMenuAlignCenter,
-    .did_close = prv_action_menu_did_close,
-  };
-  s_action_menu = action_menu_open(&config);
+  s_last_activity = countdown_timer_get_epoch_ms();
 }
 
 
@@ -343,6 +296,9 @@ static void prv_phone_timers_updated_callback(const PhoneTimerSpec *specs, uint8
       if (countdown_timer_get_duration(matched) != spec->duration_ms) {
         countdown_timer_update(matched, spec->duration_ms, true);
       }
+      if (countdown_timer_get_snooze(matched) != spec->snooze_ms) {
+        countdown_timer_set_snooze(matched, spec->snooze_ms);
+      }
       if (strcmp(countdown_timer_get_name(matched), spec->name) != 0) {
         countdown_timer_set_name(matched, spec->name);
       }
@@ -352,6 +308,7 @@ static void prv_phone_timers_updated_callback(const PhoneTimerSpec *specs, uint8
       if (created == NULL) {
         continue;
       }
+      countdown_timer_set_snooze(created, spec->snooze_ms);
       if (spec->name[0] != '\0') {
         countdown_timer_set_name(created, spec->name);
       }
@@ -377,8 +334,13 @@ static void prv_phone_timers_updated_callback(const PhoneTimerSpec *specs, uint8
       if (removed == setting_timer) {
         setting_deleted = true;
       }
-      if (removed == s_edit_target_timer) {
-        s_edit_target_timer = NULL;
+      if (removed == edit_menu_window_get_timer(s_edit_menu_window)) {
+        edit_menu_window_pop(s_edit_menu_window, false);
+        edit_menu_window_set_timer(s_edit_menu_window, NULL);
+      }
+      if (removed == popup_window_get_countdown_timer(s_popup_window)) {
+        popup_window_pop(s_popup_window, false);
+        popup_window_set_countdown_timer(s_popup_window, NULL);
       }
       if (removed == s_dictation_target_timer) {
         s_dictation_target_timer = NULL;
@@ -444,6 +406,8 @@ static void app_timer_callback(void *data) {
   if (countdown_timer != NULL) {
     prv_sort_timers_by_recency();
     prv_save_and_sync();
+    menu_window_reload_data(s_menu_window);
+    menu_window_refresh(s_menu_window);
     detail_window_deep_refresh(s_detail_window);
 
     if (countdown_timer_has_name(countdown_timer)) {
@@ -455,16 +419,20 @@ static void app_timer_callback(void *data) {
 
     popup_window_set_countdown_timer(s_popup_window, countdown_timer);
     popup_window_set_title(s_popup_window, s_popup_title_buff);
+    popup_window_set_overtime(s_popup_window, true,
+                              countdown_timer_get_original_end(countdown_timer),
+                              countdown_timer_get_snooze(countdown_timer), s_sound_enabled);
     popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
 #ifdef PBL_PLATFORM_APLITE
     popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_ALARM);
 #else
     popup_window_set_pdc(s_popup_window, RESOURCE_ID_ICON_ALARM_CLOCK, true);
 #endif
-    popup_window_set_auto_close_duration(s_popup_window,
-      s_sound_enabled ? POPUP_CHIME_DURATION_MS : 15000);
+    popup_window_set_auto_close_duration(s_popup_window, 0);
     popup_window_add_action_bar(s_popup_window);
-    popup_window_push(s_popup_window, true);
+    if (!popup_window_get_topmost_window(s_popup_window)) {
+      popup_window_push(s_popup_window, true);
+    }
     popup_window_set_vibes(s_sound_enabled);
 
     s_last_activity = countdown_timer_get_epoch_ms();
@@ -501,20 +469,33 @@ static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, 
     popup_window_pop(s_popup_window, true);
     return;
   }
-  countdown_timer_update(countdown_timer, COUNTDOWN_TIMER_SNOOZE_DELAY, false);
-  countdown_timer_start(countdown_timer);
+  countdown_timer_snooze(countdown_timer);
   prv_promote_timer(countdown_timer);
   prv_save_and_sync();
+  menu_window_reload_data(s_menu_window);
+  menu_window_refresh(s_menu_window);
   popup_window_pop(s_popup_window, true);
   if (!detail_window_get_topmost_window(s_detail_window)) {
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
     detail_window_push(s_detail_window, false);
   }
   detail_window_deep_refresh(s_detail_window);
+  if (s_app_timer != NULL) {
+    app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
+  }
   s_last_activity = countdown_timer_get_epoch_ms();
 }
 
 static void popup_window_stop_timer_callback(void *context) {
+  CountdownTimer *timer = popup_window_get_countdown_timer(s_popup_window);
+  if (timer != NULL &&
+      countdown_timer_list_get_timer_index(s_countdown_timers, s_countdown_timers_count,
+                                           timer) >= 0) {
+    countdown_timer_clear_original_end(timer);
+    prv_save_state();
+    detail_window_deep_refresh(s_detail_window);
+  }
+  popup_window_set_countdown_timer(s_popup_window, NULL);
   popup_window_pop(s_popup_window, true);
   s_last_activity = countdown_timer_get_epoch_ms();
 }
@@ -522,6 +503,21 @@ static void popup_window_stop_timer_callback(void *context) {
 static void setting_window_complete_callback(int64_t duration, void *context) {
   SettingWindow *setting_window = (SettingWindow*)context;
   CountdownTimer *countdown_timer = setting_window_get_timer(setting_window);
+
+  if (setting_window_get_mode(setting_window) == SETTING_WINDOW_MODE_SNOOZE) {
+    if (countdown_timer != NULL && duration >= COUNTDOWN_TIMER_MIN_SNOOZE_MS) {
+      countdown_timer_set_snooze(countdown_timer, duration);
+      prv_save_and_sync();
+      vibes_short_pulse();
+    }
+    setting_window_pop(setting_window, true);
+    if (s_app_timer != NULL) {
+      app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
+    }
+    s_last_activity = countdown_timer_get_epoch_ms();
+    return;
+  }
+
   if (duration < TIMER_MIN_LENGTH) {
     setting_window_pop(setting_window, true);
     if (s_app_timer != NULL) {
@@ -535,6 +531,7 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
     countdown_timer_list_add(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
       &s_countdown_timers_count, countdown_timer);
     countdown_timer_start(countdown_timer);
+    prv_promote_timer(countdown_timer);
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
@@ -544,11 +541,13 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
   } else {
     countdown_timer_update(countdown_timer, duration, true);
     countdown_timer_start(countdown_timer);
+    prv_promote_timer(countdown_timer);
+    menu_window_reload_data(s_menu_window);
+    menu_window_refresh(s_menu_window);
     detail_window_deep_refresh(s_detail_window);
     setting_window_pop(setting_window, true);
   }
 
-  prv_promote_timer(countdown_timer);
   prv_save_and_sync();
 
   if (s_app_timer != NULL) {
@@ -558,7 +557,8 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
 }
 
 static void detail_window_edit_timer_callback(CountdownTimer *countdown_timer, void *context) {
-  prv_open_edit_action_menu(countdown_timer);
+  edit_menu_window_set_timer(s_edit_menu_window, countdown_timer);
+  edit_menu_window_push(s_edit_menu_window, true);
   s_last_activity = countdown_timer_get_epoch_ms();
 }
 
@@ -578,6 +578,8 @@ static void detail_window_playpause_timer_callback(CountdownTimer *countdown_tim
   }
   prv_promote_timer(countdown_timer);
   prv_save_and_sync();
+  menu_window_reload_data(s_menu_window);
+  menu_window_refresh(s_menu_window);
   detail_window_deep_refresh(s_detail_window);
   s_last_activity = countdown_timer_get_epoch_ms();
 }
@@ -594,10 +596,11 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
   prv_save_and_sync();
 
   menu_window_reload_data(s_menu_window);
-  menu_window_reload_data(s_menu_window);
+  menu_window_refresh(s_menu_window);
   detail_window_pop(s_detail_window, true);
 
   popup_window_set_title(s_popup_window, "Timer Deleted");
+  popup_window_set_overtime(s_popup_window, false, 0, 0, false);
   popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
 #ifdef PBL_PLATFORM_APLITE
   popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_SHREADER);
@@ -640,6 +643,7 @@ static bool menu_window_get_sound_enabled_callback(void *context) {
 
 static void menu_window_click_callback(uint8_t index, void *context) {
   if (index == 0) {
+    setting_window_set_mode(s_setting_window, SETTING_WINDOW_MODE_DURATION);
     setting_window_set_timer(s_setting_window, NULL);
     setting_window_push(s_setting_window, true);
   } else if (index > s_countdown_timers_count) {
@@ -724,6 +728,15 @@ static void initialize(void) {
   s_detail_window = detail_window_create(detail_callbacks);
   detail_window_set_highlight_color(s_detail_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
 
+  // create edit menu window
+  EditMenuWindowCallbacks edit_callbacks = {
+    .on_select = prv_edit_menu_select_cb,
+    .context = NULL,
+  };
+  s_edit_menu_window = edit_menu_window_create(edit_callbacks);
+  edit_menu_window_set_highlight_color(s_edit_menu_window,
+                                       PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
+
   // create name picker window
   NameWindowCallbacks name_callbacks = {
     .on_clear = prv_name_window_clear_cb,
@@ -751,6 +764,7 @@ static void initialize(void) {
 
   // open the setting screen if no timers
   if (s_countdown_timers_count == 0) {
+    setting_window_set_mode(s_setting_window, SETTING_WINDOW_MODE_DURATION);
     setting_window_set_timer(s_setting_window, NULL);
     setting_window_push(s_setting_window, true);
   }
@@ -829,10 +843,6 @@ static void deinitialize(void) {
     dictation_session_destroy(s_dictation_session);
     s_dictation_session = NULL;
   }
-  if (s_root_level != NULL) {
-    action_menu_hierarchy_destroy(s_root_level, NULL, NULL);
-    s_root_level = NULL;
-  }
   phone_disconnect();
 
   prv_save_state();
@@ -850,6 +860,7 @@ static void deinitialize(void) {
   popup_window_destroy(s_popup_window);
   setting_window_destroy(s_setting_window);
   name_window_destroy(s_name_window);
+  edit_menu_window_destroy(s_edit_menu_window);
   detail_window_destroy(s_detail_window);
   menu_window_destroy(s_menu_window);
   countdown_timer_list_destroy_all(s_countdown_timers, &s_countdown_timers_count);
