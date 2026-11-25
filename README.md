@@ -16,7 +16,7 @@ A countdown timer watchapp for Pebble Time 2 (`emery`) and Pebble Round 2 (`gabb
     - **Edit Name** — opens the name picker with an optional remove/clear icon at the top (when a name is already set), a mic icon for voice dictation (`DictationSession`), and customizable preset names below (*Coffee*, *Laundry*, *Tea*, *Cooking*, *Workout*, *Focus*, *Eggs*, *Nap* by default)
 - **Phone Settings & Two-Way Sync**: Open **App Settings** in the Pebble mobile app to view, rename, re-time (`HH:MM:SS`), delete, or add up to 8 saved timers directly from your phone (without interrupting running timers), plus customize the 8 quick preset names. Changes sync live when the watchapp is open or automatically the next time you open it.
 - **System Touch Navigation**: Opts into PebbleOS touch navigation (`app_touch_navigation_enable(true)`) alongside full physical button support.
-- **Hands-Free Alarm Dismiss**: When a timer expires, the alarm popup shows the timer's name (*e.g., "Coffee — Time's Up!"*), vibrates/chimes, and can be snoozed (+1 min), dismissed by button, or dismissed with a wrist shake (`accel_tap_service`).
+- **Hands-Free Alarm Dismiss**: When a timer expires, the alarm popup shows the timer's name (*e.g., "Coffee — Time's Up!"*), vibrates/chimes, and can be snoozed (per-timer snooze, default 1 min, with a running `+M:SS` overtime counter), dismissed by button, or dismissed with a wrist shake (`accel_tap_service`).
 
 ## Build & Test
 
